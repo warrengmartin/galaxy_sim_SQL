@@ -92,7 +92,7 @@ effectController = {
     height: height,
     middleVelocity: middleVelocity,
     velocity: velocity,
-    typeOfSimulation: 2,
+    typeOfSimulation: 1,
     autoRotation: false
 };
 
@@ -124,7 +124,7 @@ function selectChoice(choice) {
             height: height,
             middleVelocity: middleVelocity,
             velocity: 7,
-            typeOfSimulation: 2,
+            typeOfSimulation: 1,
             autoRotation: false
         };
     }
