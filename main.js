@@ -31,8 +31,8 @@ let material;
 let controls;
 let luminosity;
 let paused = false;
-let autoRotation = true;
-let bloom = { strength: 1.0};
+let autoRotation = false;
+let bloom = { strength: 0.7};
 let bloomPass;
 // motion blur
 let renderTargetParameters;
@@ -76,23 +76,23 @@ outputPass.renderToScreen = true;
 
 effectController = {
     // Can be changed dynamically
-    gravity: gravity,
-    interactionRate: interactionRate,
-    timeStep: timeStep,
-    blackHoleForce: blackHoleForce,
-    luminosity: constLuminosity,
-    maxAccelerationColor: 50.0,
-    maxAccelerationColorPercent: 5,
+    gravity: 225.0,
+    interactionRate: 0.05,
+    timeStep: 0.0001,
+    blackHoleForce: 100.0,
+    luminosity: 0.25,
+    maxAccelerationColor: 2.0,
+    maxAccelerationColorPercent: 20,
     motionBlur: false,
     hideDarkMatter: false,
 
     // Must restart simulation
-    numberOfStars: numberOfStars,
-    radius: radius,
-    height: height,
-    middleVelocity: middleVelocity,
-    velocity: velocity,
-    typeOfSimulation: 1,
+    numberOfStars: 100000,
+    radius: 2,
+    height: 5,
+    middleVelocity: 2,
+    velocity: 15,
+    typeOfSimulation: 2,
     autoRotation: false
 };
 
@@ -108,23 +108,23 @@ function selectChoice(choice) {
     if (selectedChoice === 1){
         effectController = {
             // Can be changed dynamically
-            gravity: gravity,
-            interactionRate: 0.5,
-            timeStep: timeStep,
-            blackHoleForce: blackHoleForce,
-            luminosity: constLuminosity,
-            maxAccelerationColor: 4.0,
-            maxAccelerationColorPercent: 0.4,
+            gravity: 225.0,
+            interactionRate: 0.05,
+            timeStep: 0.0001,
+            blackHoleForce: 100.0,
+            luminosity: 0.25,
+            maxAccelerationColor: 2.0,
+            maxAccelerationColorPercent: 20,
             motionBlur: false,
             hideDarkMatter: false,
 
             // Must restart simulation
-            numberOfStars: 10000,
-            radius: 50,
-            height: height,
-            middleVelocity: middleVelocity,
-            velocity: 7,
-            typeOfSimulation: 1,
+            numberOfStars: 100000,
+            radius: 2,
+            height: 5,
+            middleVelocity: 2,
+            velocity: 15,
+            typeOfSimulation: 2,
             autoRotation: false
         };
     }
@@ -173,7 +173,7 @@ function init(typeOfSimulation) {
     if (effectController.typeOfSimulation === 1 || effectController.typeOfSimulation === 3) {
         controls.autoRotate = false;
     } else if (effectController.typeOfSimulation === 2){
-        controls.autoRotate = true;
+        controls.autoRotate = false;
         controls.autoRotateSpeed = -1.0;
     }
 
@@ -740,7 +740,7 @@ function switchSimulation(){
                     middleVelocity: 2,
                     velocity: 15,
                     typeOfSimulation: 2,
-                    autoRotation: true
+                    autoRotation: false
                 };
                 material.dispose();
                 geometry.dispose();
@@ -850,7 +850,7 @@ function switchSimulation(){
                     middleVelocity: 2,
                     velocity: 15,
                     typeOfSimulation: 2,
-                    autoRotation: true
+                    autoRotation: false
                 };
                 material.dispose();
                 geometry.dispose();
