@@ -38,57 +38,6 @@ let bloomPass;
 let renderTargetParameters;
 let savePass;
 let blendPass;
-// Spatial grid visualization
-let showGrid = false;
-let gridLines = [];
-let cellSize = 50;
-
-// Spatial grid calculation functions
-function getCellIndex(x, y, z, cellSize) {
-    return {
-        cx: Math.round(x / cellSize),
-        cy: Math.round(y / cellSize),
-        cz: Math.round(z / cellSize)
-    };
-}
-
-function getCellsInShell(r) {
-    const cells = [];
-    for (let cx = -r; cx <= r; cx++) {
-        for (let cy = -r; cy <= r; cy++) {
-            for (let cz = -r; cz <= r; cz++) {
-                if (Math.max(Math.abs(cx), Math.abs(cy), Math.abs(cz)) === r) {
-                    cells.push({cx, cy, cz});
-                }
-            }
-        }
-    }
-    return cells;
-}
-
-function visualizeGrid() {
-    // Clear existing grid lines
-    gridLines.forEach(line => scene.remove(line));
-    gridLines = [];
-    
-    if (!showGrid) return;
-    
-    const material = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.3 });
-    const maxShells = 3; // Show 3 shells around the center
-    
-    for (let shell = 0; shell <= maxShells; shell++) {
-        const cells = shell === 0 ? [{cx: 0, cy: 0, cz: 0}] : getCellsInShell(shell);
-        
-        cells.forEach(({cx, cy, cz}) => {
-            const geometry = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
-            const edges = new THREE.EdgesGeometry(geometry);
-            const line = new THREE.LineSegments(edges, material);
-            line.position.set(cx * cellSize, cy * cellSize, cz * cellSize);
-            scene.add(line);
-            gridLines.push(line);
-        });
-    }
-}
 
 /*--------------------------INITIALISATION-----------------------------------------------*/
 const gravity = 20;
@@ -236,14 +185,6 @@ function init(typeOfSimulation) {
     container.appendChild( stats.dom );
 
     window.addEventListener( 'resize', onWindowResize );
-
-    // Add keyboard event listener for grid visualization
-    window.addEventListener('keydown', (event) => {
-        if (event.key === ']') {
-            showGrid = !showGrid;
-            visualizeGrid();
-        }
-    });
 
     initGUI();
     initParticles(typeOfSimulation);
