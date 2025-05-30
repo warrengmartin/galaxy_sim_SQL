@@ -39,6 +39,10 @@ let renderTargetParameters;
 let savePass;
 let blendPass;
 
+// Controls how often to collect and send particle data to the backend database
+// Higher values = fewer snapshots = better performance, less data
+let snapshotFrameInterval = 60; // Every 60 frames (1-2 seconds at 60 FPS)
+
 /*--------------------------INITIALISATION-----------------------------------------------*/
 const gravity = 20;
 const interactionRate = 1.0;
@@ -943,6 +947,103 @@ function render() {
     material.uniforms.uHideDarkMatter.value = effectController.hideDarkMatter;
     composer.render(scene, camera);
 
+    // Send snapshots every N frames
+    if (frameNumber % snapshotFrameInterval === 0) {
+        collectAndSendParticleSnapshots();
+    }
+}
+
+// Store previous velocities for acceleration calculation
+let previousVelocities = null;
+let frameNumber = 0;
+
+function sendParticleSnapshotsToBackend(snapshots) {
+    fetch('http://localhost:3001/particle_snapshots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshots)
+    }).then(res => {
+        if (res.ok) {
+            console.log('Particle snapshots sent to backend.');
+        } else {
+            console.error('Failed to send particle snapshots to backend.');
+        }
+    }).catch(console.error);
+}
+
+function collectAndSendParticleSnapshots() {
+    // Get current positions and velocities from GPU
+    const posTexture = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
+    const velTexture = gpuCompute.getCurrentRenderTarget(velocityVariable).texture;
+    const size = Math.round(Math.sqrt(effectController.numberOfStars));
+    const gl = renderer.getContext();
+    // Create buffers to read data
+    const posBuffer = new Float32Array(size * size * 4);
+    const velBuffer = new Float32Array(size * size * 4);
+    // Read data from GPU
+    renderer.readRenderTargetPixels(
+        gpuCompute.getCurrentRenderTarget(positionVariable),
+        0, 0, size, size, posBuffer
+    );
+    renderer.readRenderTargetPixels(
+        gpuCompute.getCurrentRenderTarget(velocityVariable),
+        0, 0, size, size, velBuffer
+    );
+    // Calculate acceleration if possible
+    let accBuffer = null;
+    if (previousVelocities) {
+        accBuffer = new Float32Array(size * size * 4);
+        for (let i = 0; i < velBuffer.length; i += 4) {
+            accBuffer[i] = (velBuffer[i] - previousVelocities[i]) / effectController.timeStep;
+            accBuffer[i+1] = (velBuffer[i+1] - previousVelocities[i+1]) / effectController.timeStep;
+            accBuffer[i+2] = (velBuffer[i+2] - previousVelocities[i+2]) / effectController.timeStep;
+            accBuffer[i+3] = 0;
+        }
+    }
+    // Build snapshot array
+    const snapshots = [];
+    
+    // Determine sampling rate based on number of particles
+    // For very large simulations, we only save a fraction of the particles
+    const totalParticles = posBuffer.length / 4;
+    let samplingRate = 1; // Default: save all particles
+    
+    if (totalParticles > 100000) {
+        samplingRate = Math.floor(totalParticles / 10000); // Save approximately 10,000 particles
+    } else if (totalParticles > 10000) {
+        samplingRate = Math.floor(totalParticles / 1000); // Save approximately 1,000 particles
+    }
+    
+    for (let k = 0, idx = 0; k < posBuffer.length; k += 4, idx++) {
+        // Apply sampling to reduce data volume
+        if (idx % samplingRate !== 0) continue;
+        
+        const x = posBuffer[k], y = posBuffer[k+1], z = posBuffer[k+2];
+        const vx = velBuffer[k], vy = velBuffer[k+1], vz = velBuffer[k+2];
+        const speed = Math.sqrt(vx*vx + vy*vy + vz*vz);
+        let ax = 0, ay = 0, az = 0, force = 0;
+        if (accBuffer) {
+            ax = accBuffer[k];
+            ay = accBuffer[k+1];
+            az = accBuffer[k+2];
+            // For now, force is just magnitude of acceleration (mass=1)
+            force = Math.sqrt(ax*ax + ay*ay + az*az);
+        }
+        snapshots.push({
+            frame_number: frameNumber,
+            particle_index: idx,
+            x, y, z, vx, vy, vz, speed, ax, ay, az, force
+        });
+    }
+    previousVelocities = velBuffer.slice();
+    frameNumber++;
+    
+    // Log the sampling statistics
+    if (frameNumber % 10 === 0) {
+        console.log(`Sending snapshot data: ${snapshots.length} particles (sampling rate: 1:${samplingRate})`);
+    }
+    
+    sendParticleSnapshotsToBackend(snapshots);
 }
 
 function showLoadingMessage(message) {
@@ -1011,7 +1112,7 @@ function sendParticlesToBackend(posArray, velArray) {
             vz: velArray[k+2]
         });
     }
-    fetch('http://localhost:3000/particles', {
+    fetch('http://localhost:3001/particles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(particlesData)
