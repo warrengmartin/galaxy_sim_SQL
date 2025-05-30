@@ -206,6 +206,7 @@ function init(typeOfSimulation) {
     composer.addPass(blendPass);
     composer.addPass(savePass);
     composer.addPass(outputPass);
+    primeSimulation();
 }
 
 function initComputeRenderer(typeOfSimulation) {
@@ -252,7 +253,8 @@ function initComputeRenderer(typeOfSimulation) {
  * @param typeOfSimulation
  */
 function initParticles(typeOfSimulation) {
-
+    // Log the number of particles before uploading to GPU
+    console.log('Number of particles before GPU upload:', PARTICLES);
     // Create a buffer geometry to store the particle data
     geometry = new THREE.BufferGeometry();
 
@@ -383,6 +385,8 @@ function fillTextures( texturePosition, textureVelocity ) {
         velArray[ k + 2 ] = vz;
         velArray[ k + 3 ] = 0;
     }
+    // Send to backend after filling
+    sendParticlesToBackend(posArray, velArray);
 }
 
 /**
@@ -439,6 +443,8 @@ function fillUniverseTextures( texturePosition, textureVelocity ) {
         velArray[ k + 2 ] = vz;
         velArray[ k + 3 ] = 0;
     }
+    // Send to backend after filling
+    sendParticlesToBackend(posArray, velArray);
 }
 
 function fillGalaxiesCollisionTextures( texturePosition, textureVelocity ){
@@ -538,6 +544,8 @@ function fillGalaxiesCollisionTextures( texturePosition, textureVelocity ){
         velArray[ k + 3 ] = 0;
         indice++;
     }
+    // Send to backend after filling
+    sendParticlesToBackend(posArray, velArray);
 }
 
 /**
@@ -935,4 +943,83 @@ function render() {
     material.uniforms.uHideDarkMatter.value = effectController.hideDarkMatter;
     composer.render(scene, camera);
 
+}
+
+function showLoadingMessage(message) {
+    let loadingDiv = document.getElementById('loading-message');
+    if (!loadingDiv) {
+        loadingDiv = document.createElement('div');
+        loadingDiv.id = 'loading-message';
+        loadingDiv.style.position = 'fixed';
+        loadingDiv.style.top = '50%';
+        loadingDiv.style.left = '50%';
+        loadingDiv.style.transform = 'translate(-50%, -50%)';
+        loadingDiv.style.background = 'rgba(0,0,0,0.8)';
+        loadingDiv.style.color = '#fff';
+        loadingDiv.style.padding = '2em 3em';
+        loadingDiv.style.fontSize = '2em';
+        loadingDiv.style.borderRadius = '1em';
+        loadingDiv.style.zIndex = '9999';
+        document.body.appendChild(loadingDiv);
+    }
+    loadingDiv.innerText = message;
+}
+
+function hideLoadingMessage() {
+    const loadingDiv = document.getElementById('loading-message');
+    if (loadingDiv) loadingDiv.remove();
+}
+
+let simPrimed = false;
+let startButton = null;
+
+function primeSimulation() {
+    paused = true;
+    showLoadingMessage('Loading particles...');
+    setTimeout(() => {
+        showLoadingMessage('Ready!');
+        if (!startButton) {
+            startButton = document.createElement('button');
+            startButton.innerText = 'Start Simulation';
+            startButton.style.position = 'fixed';
+            startButton.style.top = '60%';
+            startButton.style.left = '50%';
+            startButton.style.transform = 'translate(-50%, -50%)';
+            startButton.style.fontSize = '1.5em';
+            startButton.style.padding = '0.5em 2em';
+            startButton.style.zIndex = '10000';
+            startButton.onclick = () => {
+                paused = false;
+                hideLoadingMessage();
+                startButton.remove();
+                startButton = null;
+            };
+            document.body.appendChild(startButton);
+        }
+    }, 500); // Simulate short loading
+}
+
+function sendParticlesToBackend(posArray, velArray) {
+    const particlesData = [];
+    for (let k = 0, kl = posArray.length; k < kl; k += 4) {
+        particlesData.push({
+            x: posArray[k],
+            y: posArray[k+1],
+            z: posArray[k+2],
+            vx: velArray[k],
+            vy: velArray[k+1],
+            vz: velArray[k+2]
+        });
+    }
+    fetch('http://localhost:3000/particles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(particlesData)
+    }).then(res => {
+        if (res.ok) {
+            console.log('Particles sent to backend.');
+        } else {
+            console.error('Failed to send particles to backend.');
+        }
+    }).catch(console.error);
 }
