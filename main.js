@@ -1124,3 +1124,200 @@ function sendParticlesToBackend(posArray, velArray) {
         }
     }).catch(console.error);
 }
+
+// Add event listener for the headless button directly (now in HTML)
+window.addEventListener('DOMContentLoaded', () => {
+    const headlessBtn = document.getElementById('headlessBtn');
+    if (headlessBtn) {
+        headlessBtn.onclick = showHeadlessPrompt;
+    }
+});
+
+// Show a prompt/form for headless parameters
+function showHeadlessPrompt() {
+    // Remove menu for clarity
+    const mainContainer = document.getElementById('main-container');
+    if (mainContainer) mainContainer.remove();
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'headless-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100vw';
+    overlay.style.height = '100vh';
+    overlay.style.background = 'rgba(0,0,0,0.85)';
+    overlay.style.display = 'flex';
+    overlay.style.flexDirection = 'column';
+    overlay.style.justifyContent = 'center';
+    overlay.style.alignItems = 'center';
+    overlay.style.zIndex = '9999';
+    // Form
+    const form = document.createElement('form');
+    form.style.background = '#222';
+    form.style.padding = '2em 3em';
+    form.style.borderRadius = '1em';
+    form.style.display = 'flex';
+    form.style.flexDirection = 'column';
+    form.style.gap = '1em';
+    form.style.color = '#fff';
+    form.innerHTML = `
+        <h2>Headless Simulation</h2>
+        <label>Frames per second: <input id="headless-fps" type="number" min="1" max="1000" value="110" /></label>
+        <label>Duration (minutes): <input id="headless-mins" type="number" min="1" max="120" value="5" /></label>
+        <button type="submit" class="button">Start Headless</button>
+    `;
+    form.onsubmit = function(e) {
+        e.preventDefault();
+        const fps = parseInt(document.getElementById('headless-fps').value, 10) || 110;
+        const mins = parseInt(document.getElementById('headless-mins').value, 10) || 5;
+        overlay.remove();
+        primeHeadlessSimulation({ fps, mins });
+    };
+    overlay.appendChild(form);
+    document.body.appendChild(overlay);
+}
+
+// Headless pause/start logic and loading screen
+let headlessPaused = true;
+let headlessShouldStop = false;
+let headlessProgressDiv = null;
+
+function primeHeadlessSimulation({ fps, mins }) {
+    // Use default universe parameters, but no rendering or GUI
+    const totalFrames = fps * mins * 60;
+    // Set up effectController for universe sim, no background
+    effectController = {
+        gravity: 225.0,
+        interactionRate: 0.05,
+        timeStep: 0.0001,
+        blackHoleForce: 100.0,
+        luminosity: 0.25,
+        maxAccelerationColor: 2.0,
+        maxAccelerationColorPercent: 20,
+        motionBlur: false,
+        hideDarkMatter: false,
+        numberOfStars: 100000,
+        radius: 2,
+        height: 5,
+        middleVelocity: 2,
+        velocity: 15,
+        typeOfSimulation: 2,
+        autoRotation: false
+    };
+    PARTICLES = effectController.numberOfStars;
+    // Minimal Three.js setup for GPUComputationRenderer
+    const canvas = document.createElement('canvas');
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.setSize(1, 1);
+    let textureSize = Math.round(Math.sqrt(effectController.numberOfStars));
+    gpuCompute = new GPUComputationRenderer(textureSize, textureSize, renderer);
+    if (renderer.capabilities.isWebGL2 === false) {
+        gpuCompute.setDataType(THREE.HalfFloatType);
+    }
+    const dtPosition = gpuCompute.createTexture();
+    const dtVelocity = gpuCompute.createTexture();
+    fillUniverseTextures(dtPosition, dtVelocity);
+    velocityVariable = gpuCompute.addVariable('textureVelocity', computeShaderVelocity, dtVelocity);
+    positionVariable = gpuCompute.addVariable('texturePosition', computeShaderPosition, dtPosition);
+    gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
+    gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]);
+    velocityUniforms = velocityVariable.material.uniforms;
+    velocityUniforms['gravity'] = { value: effectController.gravity };
+    velocityUniforms['interactionRate'] = { value: effectController.interactionRate };
+    velocityUniforms['timeStep'] = { value: effectController.timeStep };
+    velocityUniforms['uMaxAccelerationColor'] = { value: effectController.maxAccelerationColor };
+    velocityUniforms['blackHoleForce'] = { value: effectController.blackHoleForce };
+    velocityUniforms['luminosity'] = { value: effectController.luminosity };
+    const error = gpuCompute.init();
+    if (error !== null) {
+        alert('Error initializing GPUComputationRenderer: ' + error);
+        return;
+    }
+    previousVelocities = null;
+    frameNumber = 0;
+    headlessPaused = true;
+    headlessShouldStop = false;
+    // Show loading/progress UI
+    showHeadlessLoadingScreen({ fps, mins, totalFrames });
+}
+
+function showHeadlessLoadingScreen({ fps, mins, totalFrames }) {
+    // Remove any previous
+    if (headlessProgressDiv) headlessProgressDiv.remove();
+    headlessProgressDiv = document.createElement('div');
+    headlessProgressDiv.id = 'headless-progress';
+    headlessProgressDiv.style.position = 'fixed';
+    headlessProgressDiv.style.top = '0';
+    headlessProgressDiv.style.left = '0';
+    headlessProgressDiv.style.width = '100vw';
+    headlessProgressDiv.style.height = '100vh';
+    headlessProgressDiv.style.background = 'rgba(0,0,0,0.85)';
+    headlessProgressDiv.style.display = 'flex';
+    headlessProgressDiv.style.flexDirection = 'column';
+    headlessProgressDiv.style.justifyContent = 'center';
+    headlessProgressDiv.style.alignItems = 'center';
+    headlessProgressDiv.style.zIndex = '10000';
+    headlessProgressDiv.innerHTML = `
+        <div style="background:#222;padding:2em 3em;border-radius:1em;color:#fff;display:flex;flex-direction:column;align-items:center;gap:1em;">
+            <h2>Particles initialized!</h2>
+            <p>Ready to run headless simulation for <b>${mins} min</b> at <b>${fps} fps</b> (${totalFrames} frames).</p>
+            <button id="start-headless-btn" class="button" style="font-size:1.2em;padding:0.5em 2em;">Start Simulation</button>
+            <button id="cancel-headless-btn" class="button" style="font-size:1em;padding:0.3em 1.5em;background:#444;">Cancel</button>
+            <div id="headless-progress-bar" style="width:300px;height:20px;background:#444;border-radius:10px;overflow:hidden;margin-top:1em;display:none;">
+                <div id="headless-progress-fill" style="height:100%;width:0%;background:#4caf50;"></div>
+            </div>
+            <div id="headless-progress-text" style="margin-top:0.5em;display:none;"></div>
+        </div>
+    `;
+    document.body.appendChild(headlessProgressDiv);
+    document.getElementById('start-headless-btn').onclick = () => {
+        headlessPaused = false;
+        document.getElementById('start-headless-btn').disabled = true;
+        document.getElementById('cancel-headless-btn').disabled = true;
+        runHeadlessSimulationWithProgress({ fps, mins, totalFrames });
+    };
+    document.getElementById('cancel-headless-btn').onclick = () => {
+        headlessShouldStop = true;
+        headlessProgressDiv.remove();
+    };
+}
+
+async function runHeadlessSimulationWithProgress({ fps, mins, totalFrames }) {
+    showHeadlessProgressBar(0, totalFrames, 0, fps, mins);
+    let startTime = Date.now();
+    for (let i = 0; i < totalFrames; i++) {
+        if (headlessShouldStop) break;
+        while (headlessPaused) await new Promise(r => setTimeout(r, 100));
+        gpuCompute.compute();
+        if (i % snapshotFrameInterval === 0) {
+            collectAndSendParticleSnapshots();
+        }
+        previousVelocities = null;
+        frameNumber++;
+        if (i % 10 === 0) {
+            let elapsed = (Date.now() - startTime) / 1000;
+            let percent = (i + 1) / totalFrames;
+            let estTotal = elapsed / percent;
+            let estRemain = estTotal - elapsed;
+            showHeadlessProgressBar(i + 1, totalFrames, estRemain, fps, mins);
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+    if (headlessProgressDiv) headlessProgressDiv.remove();
+    alert('Headless simulation complete!');
+}
+
+function showHeadlessProgressBar(current, total, secondsLeft, fps, mins) {
+    const bar = document.getElementById('headless-progress-bar');
+    const fill = document.getElementById('headless-progress-fill');
+    const text = document.getElementById('headless-progress-text');
+    if (!bar || !fill || !text) return;
+    bar.style.display = 'block';
+    text.style.display = 'block';
+    let percent = Math.floor((current / total) * 100);
+    fill.style.width = percent + '%';
+    let min = Math.floor(secondsLeft / 60);
+    let sec = Math.floor(secondsLeft % 60);
+    text.innerHTML = `Progress: ${percent}% &mdash; ~${min}m ${sec}s remaining`;
+}
