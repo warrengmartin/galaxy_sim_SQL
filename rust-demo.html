@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Galaxy Simulation Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #000;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .button:hover {
+            background: #45a049;
+        }
+        
+        .button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
+        .canvas-container {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, #001122 0%, #000000 100%);
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        
+        .spinner {
+            border: 4px solid #333;
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .log {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .error {
+            color: #ff6b6b;
+        }
+        
+        .success {
+            color: #4CAF50;
+        }
+        
+        .warning {
+            color: #ffa726;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🦀 Rust Galaxy Simulation Test</h1>
+            <p>Ultra-high performance WASM-based particle simulation</p>
+        </div>
+        
+        <div class="controls">
+            <button class="button" id="initBtn">Initialize Simulation</button>
+            <button class="button" id="startBtn" disabled>Start Animation</button>
+            <button class="button" id="stopBtn" disabled>Stop Animation</button>
+            <button class="button" id="resetBtn" disabled>Reset</button>
+            <button class="button" id="benchmarkBtn" disabled>Run Benchmark</button>
+            <select id="particleCountSelect">
+                <option value="1000">1,000 Particles</option>
+                <option value="5000">5,000 Particles</option>
+                <option value="10000" selected>10,000 Particles</option>
+                <option value="50000">50,000 Particles</option>
+                <option value="100000">100,000 Particles</option>
+            </select>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-label">FPS</div>
+                <div class="stat-value" id="fpsValue">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Particles</div>
+                <div class="stat-value" id="particleValue">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Frame Time</div>
+                <div class="stat-value" id="frameTimeValue">0ms</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Mode</div>
+                <div class="stat-value" id="modeValue">-</div>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="renderCanvas"></canvas>
+            <div class="loading" id="loadingIndicator" style="display: none;">
+                <div class="spinner"></div>
+                <div>Initializing WASM...</div>
+            </div>
+        </div>
+        
+        <div class="log" id="logContainer">
+            <div>🚀 Ready to initialize Rust simulation...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
+        import { rustSimulation, PerformanceComparison } from './src/RustGalaxySimulation.js';
+        
+        class RustSimulationDemo {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.geometry = null;
+                this.material = null;
+                this.points = null;
+                
+                this.isInitialized = false;
+                this.isAnimating = false;
+                
+                this.setupUI();
+                this.setupThreeJS();
+                
+                this.log('🎯 Demo initialized, ready to test Rust simulation');
+            }
+            
+            setupUI() {
+                document.getElementById('initBtn').addEventListener('click', () => this.initializeSimulation());
+                document.getElementById('startBtn').addEventListener('click', () => this.startAnimation());
+                document.getElementById('stopBtn').addEventListener('click', () => this.stopAnimation());
+                document.getElementById('resetBtn').addEventListener('click', () => this.resetSimulation());
+                document.getElementById('benchmarkBtn').addEventListener('click', () => this.runBenchmark());
+            }
+            
+            setupThreeJS() {
+                const canvas = document.getElementById('renderCanvas');
+                const container = canvas.parentElement;
+                
+                // Scene
+                this.scene = new THREE.Scene();
+                
+                // Camera
+                this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+                this.camera.position.z = 200;
+                
+                // Renderer
+                this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+                this.renderer.setSize(container.clientWidth, container.clientHeight);
+                this.renderer.setClearColor(0x000011, 1);
+                
+                // Resize handler
+                window.addEventListener('resize', () => this.onWindowResize());
+                
+                this.log('✅ Three.js scene initialized');
+            }
+            
+            async initializeSimulation() {
+                try {
+                    this.showLoading(true);
+                    this.log('⏳ Initializing Rust WASM simulation...');
+                    
+                    const particleCount = parseInt(document.getElementById('particleCountSelect').value);
+                    
+                    // Initialize Rust simulation
+                    const success = await rustSimulation.initialize(particleCount);
+                    if (!success) {
+                        throw new Error('Failed to initialize Rust simulation');
+                    }
+                    
+                    // Setup Three.js geometry for particles
+                    this.setupParticleGeometry(particleCount);
+                    
+                    this.isInitialized = true;
+                    this.updateUI();
+                    this.startStatsUpdate();
+                    
+                    this.log(`✅ Simulation initialized with ${particleCount} particles`, 'success');
+                    
+                } catch (error) {
+                    this.log(`❌ Initialization failed: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+            
+            setupParticleGeometry(particleCount) {
+                // Remove existing points
+                if (this.points) {
+                    this.scene.remove(this.points);
+                }
+                
+                // Create geometry
+                this.geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(particleCount * 3);
+                this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                
+                // Create material
+                this.material = new THREE.PointsMaterial({
+                    color: 0x4CAF50,
+                    size: 0.5,
+                    sizeAttenuation: true
+                });
+                
+                // Create points mesh
+                this.points = new THREE.Points(this.geometry, this.material);
+                this.scene.add(this.points);
+                
+                this.log(`🔗 Particle geometry created for ${particleCount} particles`);
+            }
+            
+            startAnimation() {
+                if (!this.isInitialized || this.isAnimating) return;
+                
+                this.isAnimating = true;
+                rustSimulation.start();
+                this.animate();
+                this.updateUI();
+                
+                this.log('▶️ Animation started', 'success');
+            }
+            
+            stopAnimation() {
+                this.isAnimating = false;
+                rustSimulation.stop();
+                this.updateUI();
+                
+                this.log('⏸️ Animation stopped', 'warning');
+            }
+            
+            resetSimulation() {
+                this.stopAnimation();
+                
+                if (rustSimulation.isInitialized) {
+                    rustSimulation.reset();
+                    this.log('🔄 Simulation reset', 'success');
+                }
+            }
+            
+            animate() {
+                if (!this.isAnimating) return;
+                
+                // Update simulation
+                if (rustSimulation.isInitialized) {
+                    rustSimulation.step();
+                    
+                    // Update Three.js geometry
+                    if (this.geometry) {
+                        rustSimulation.updateThreeGeometry(this.geometry);
+                    }
+                }
+                
+                // Render scene
+                this.renderer.render(this.scene, this.camera);
+                
+                // Continue animation
+                requestAnimationFrame(() => this.animate());
+            }
+            
+            async runBenchmark() {
+                try {
+                    this.log('🏁 Starting performance benchmark...', 'warning');
+                    this.showLoading(true);
+                    
+                    const particleCount = parseInt(document.getElementById('particleCountSelect').value);
+                    const results = await PerformanceComparison.benchmarkComparison(particleCount, 100);
+                    
+                    this.log(`📊 Benchmark Results:`, 'success');
+                    this.log(`   Rust: ${results.rustTime.toFixed(2)}ms (${results.rustStepsPerSecond.toFixed(0)} steps/sec)`, 'success');
+                    
+                } catch (error) {
+                    this.log(`❌ Benchmark failed: ${error.message}`, 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+            
+            startStatsUpdate() {
+                setInterval(() => {
+                    if (rustSimulation.isInitialized) {
+                        const stats = rustSimulation.getPerformanceStats();
+                        document.getElementById('fpsValue').textContent = stats.avgFps || 0;
+                        document.getElementById('particleValue').textContent = stats.particleCount.toLocaleString();
+                        document.getElementById('frameTimeValue').textContent = (1000 / (stats.avgFps || 1)).toFixed(1) + 'ms';
+                        document.getElementById('modeValue').textContent = 'RUST';
+                    }
+                }, 100);
+            }
+            
+            updateUI() {
+                const initBtn = document.getElementById('initBtn');
+                const startBtn = document.getElementById('startBtn');
+                const stopBtn = document.getElementById('stopBtn');
+                const resetBtn = document.getElementById('resetBtn');
+                const benchmarkBtn = document.getElementById('benchmarkBtn');
+                
+                initBtn.disabled = this.isInitialized;
+                startBtn.disabled = !this.isInitialized || this.isAnimating;
+                stopBtn.disabled = !this.isAnimating;
+                resetBtn.disabled = !this.isInitialized;
+                benchmarkBtn.disabled = !this.isInitialized || this.isAnimating;
+            }
+            
+            onWindowResize() {
+                const container = document.getElementById('renderCanvas').parentElement;
+                this.camera.aspect = container.clientWidth / container.clientHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(container.clientWidth, container.clientHeight);
+            }
+            
+            showLoading(show) {
+                document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
+            }
+            
+            log(message, type = 'info') {
+                const logContainer = document.getElementById('logContainer');
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.className = type;
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+                
+                console.log(message);
+            }
+        }
+        
+        // Initialize demo when page loads
+        window.addEventListener('load', () => {
+            new RustSimulationDemo();
+        });
+    </script>
+</body>
+</html>
