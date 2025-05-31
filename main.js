@@ -21,6 +21,8 @@ let camera, scene, renderer, geometry, composer;
 
 // Global animation frame tracking
 let animationFrameId = null;
+let frameSkipCounter = 0;
+let skipEveryOtherFrame = false; // Set to true to skip every other frame for performance
 
 
 let gpuCompute;
@@ -44,7 +46,7 @@ let blendPass;
 
 // Controls how often to collect and send particle data to the backend database
 // Higher values = fewer snapshots = better performance, less data
-let snapshotFrameInterval = 1; // Every frame (no skipping, full data capture)
+let snapshotFrameInterval = 2; // Skip every other frame (was 1 for every frame)
 
 /*--------------------------INITIALISATION-----------------------------------------------*/
 const gravity = 20;
@@ -106,11 +108,10 @@ effectController = {
 
 let PARTICLES = effectController.numberOfStars;
 
-// 1 = normal mode ; 2 = experimental mode ; 3 = replay mode ; 4 = rust mode
+// 1 = normal mode ; 2 = experimental mode ; 3 = replay mode
 let selectedChoice = 1;
 document.getElementById("choice1").addEventListener("click", () => selectChoice(1));
 document.getElementById("choice2").addEventListener("click", () => selectChoice(2));
-document.getElementById("rustBtn").addEventListener("click", () => selectRustMode());
 document.getElementById("replayBtn").addEventListener("click", () => selectReplayMode());
 
 function selectChoice(choice) {
@@ -151,6 +152,14 @@ function hideMainMenu() {
     }
 }
 
+// Global playback configuration
+let playbackConfig = {
+    startFrame: 0,
+    endFrame: 1000,
+    frameSkip: 1, // 1 = no skip, 2 = skip every other frame, etc.
+    totalFramesToDownload: 1000
+};
+
 // Handle selecting the replay mode from the main menu
 function selectReplayMode() {
     console.log('Entering replay mode...');
@@ -158,6 +167,143 @@ function selectReplayMode() {
     
     // Set that we're in replay mode
     selectedChoice = 3;
+    
+    // Show playback configuration dialog
+    showPlaybackConfigDialog();
+}
+
+// Show configuration dialog for playback settings
+function showPlaybackConfigDialog() {
+    // Create modal dialog
+    const modal = document.createElement('div');
+    modal.className = 'playback-config-modal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+    
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+        background: #1a1a1a;
+        padding: 30px;
+        border-radius: 10px;
+        border: 2px solid #4a9eff;
+        color: white;
+        font-family: 'Courier New', monospace;
+        max-width: 500px;
+        width: 90%;
+    `;
+    
+    dialog.innerHTML = `
+        <h2 style="color: #4a9eff; margin-top: 0;">Playback Configuration</h2>
+        
+        <div style="margin: 20px 0;">
+            <label style="display: block; margin-bottom: 5px;">Start Frame:</label>
+            <input type="number" id="startFrameInput" value="${playbackConfig.startFrame}" 
+                   min="0" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #4a9eff; background: #2a2a2a; color: white;">
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <label style="display: block; margin-bottom: 5px;">End Frame:</label>
+            <input type="number" id="endFrameInput" value="${playbackConfig.endFrame}" 
+                   min="1" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #4a9eff; background: #2a2a2a; color: white;">
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <label style="display: block; margin-bottom: 5px;">Frame Skip (1=no skip, 2=every other, 3=every 3rd, etc.):</label>
+            <input type="number" id="frameSkipInput" value="${playbackConfig.frameSkip}" 
+                   min="1" max="10" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #4a9eff; background: #2a2a2a; color: white;">
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <small style="color: #888;">
+                • Start Frame: Where to begin playback (usually 0)<br>
+                • End Frame: Where to stop playback<br>
+                • Frame Skip: How many frames to skip during download/playback<br>
+                  (1=no skip, 2=every other frame, 3=every 3rd frame, etc.)<br>
+                <br>
+                Total frames to download: <span id="totalFramesCalc">${Math.ceil((playbackConfig.endFrame - playbackConfig.startFrame) / playbackConfig.frameSkip)}</span><br>
+                Actual frame range: ${playbackConfig.startFrame} to ${playbackConfig.endFrame} (every ${playbackConfig.frameSkip} frames)
+            </small>
+        </div>
+        
+        <div style="display: flex; gap: 10px; margin-top: 25px;">
+            <button id="startPlaybackBtn" style="flex: 1; padding: 12px; background: #4a9eff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                Start Playback
+            </button>
+            <button id="cancelPlaybackBtn" style="flex: 1; padding: 12px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Cancel
+            </button>
+        </div>
+    `;
+    
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+    
+    // Update total frames calculation when inputs change
+    function updateTotalFrames() {
+        const start = parseInt(document.getElementById('startFrameInput').value) || 0;
+        const end = parseInt(document.getElementById('endFrameInput').value) || 1000;
+        const skip = parseInt(document.getElementById('frameSkipInput').value) || 1;
+        const total = Math.ceil(Math.max(0, end - start) / skip);
+        document.getElementById('totalFramesCalc').textContent = total;
+    }
+    
+    document.getElementById('startFrameInput').addEventListener('input', updateTotalFrames);
+    document.getElementById('endFrameInput').addEventListener('input', updateTotalFrames);
+    document.getElementById('frameSkipInput').addEventListener('input', updateTotalFrames);
+    
+    // Handle start playback button
+    document.getElementById('startPlaybackBtn').addEventListener('click', () => {
+        const startFrame = parseInt(document.getElementById('startFrameInput').value) || 0;
+        const endFrame = parseInt(document.getElementById('endFrameInput').value) || 1000;
+        const frameSkip = parseInt(document.getElementById('frameSkipInput').value) || 1;
+        
+        // Validate inputs
+        if (startFrame < 0) {
+            alert('Start frame must be 0 or greater');
+            return;
+        }
+        if (endFrame <= startFrame) {
+            alert('End frame must be greater than start frame');
+            return;
+        }
+        if (frameSkip < 1 || frameSkip > 10) {
+            alert('Frame skip must be between 1 and 10');
+            return;
+        }
+        
+        // Update global config
+        playbackConfig.startFrame = startFrame;
+        playbackConfig.endFrame = endFrame;
+        playbackConfig.frameSkip = frameSkip;
+        playbackConfig.totalFramesToDownload = Math.ceil((endFrame - startFrame) / frameSkip);
+        
+        // Remove modal
+        document.body.removeChild(modal);
+        
+        // Start the actual playback setup
+        startPlaybackWithConfig();
+    });
+    
+    // Handle cancel button
+    document.getElementById('cancelPlaybackBtn').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        showMainMenu();
+    });
+}
+
+// Start playback with the configured settings
+function startPlaybackWithConfig() {
+    console.log('Starting playback with config:', playbackConfig);
     
     // Initialize basic scene components for replay mode
     initReplayScene();
@@ -168,183 +314,11 @@ function selectReplayMode() {
     }
     
     // Show loading message and load playback data
-    showLoadingMessage('Downloading recorded simulation data...');
+    showLoadingMessage(`Downloading ${playbackConfig.totalFramesToDownload} frames (${playbackConfig.startFrame} to ${playbackConfig.endFrame}, every ${playbackConfig.frameSkip} frames)...`);
     
-    // Try to fetch with the original URL first
-    tryFetchPlaybackData('http://localhost:3001/playback/export', true);
-}
-
-// Handle selecting the Rust mode from the main menu
-async function selectRustMode() {
-    console.log('🦀 Entering Rust mode...');
-    hideMainMenu();
-    
-    // Set that we're in Rust mode
-    selectedChoice = 4;
-    
-    // Initialize effect controller with optimized values for Rust
-    effectController = {
-        gravity: 225.0,
-        interactionRate: 0.05,
-        timeStep: 0.01, // Larger time step for Rust efficiency
-        blackHoleForce: 100.0,
-        luminosity: 0.25,
-        maxAccelerationColor: 2.0,
-        maxAccelerationColorPercent: 20,
-        motionBlur: false,
-        hideDarkMatter: false,
-        numberOfStars: 50000, // More particles for Rust demo
-        radius: 100,
-        height: 5,
-        middleVelocity: 2,
-        velocity: 15,
-        typeOfSimulation: 2,
-        autoRotation: false
-    };
-    
-    // Initialize basic scene components for Rust mode
-    await initRustScene();
-    
-    // Start the animation loop if not already running
-    if (!window.animationFrameId) {
-        animate();
-    }
-}
-
-// Initialize Three.js scene optimized for Rust simulation
-async function initRustScene() {
-    console.log('🚀 Initializing Rust-powered scene...');
-    
-    try {
-        // Import the simulation manager
-        const { simulationManager, SimulationAPI } = await import('./src/SimulationModeManager.js');
-        
-        // Create basic Three.js setup
-        createBasicScene();
-        
-        // Initialize simulation manager with references
-        simulationManager.initialize({
-            scene,
-            camera,
-            renderer,
-            geometry: null, // Will be set up by the manager
-            material: null, // Will be set up by the manager
-            effectController
-        });
-        
-        // Switch to Rust mode
-        const success = await simulationManager.switchToRustMode(effectController.numberOfStars);
-        
-        if (success) {
-            console.log('✅ Rust simulation mode initialized successfully');
-            
-            // Show performance info
-            showRustModeInfo();
-            
-            // Start simulation
-            simulationManager.start();
-        } else {
-            console.error('❌ Failed to initialize Rust simulation');
-            // Fallback to replay mode or show error
-            selectReplayMode();
-        }
-        
-    } catch (error) {
-        console.error('❌ Error initializing Rust mode:', error);
-        // Fallback to replay mode
-        selectReplayMode();
-    }
-}
-
-// Create basic Three.js scene setup
-function createBasicScene() {
-    // Create scene
-    if (!scene) {
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000011);
-    }
-    
-    // Create camera
-    if (!camera) {
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
-        camera.position.set(0, 0, 200);
-        camera.lookAt(0, 0, 0);
-    }
-    
-    // Create renderer
-    if (!renderer) {
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setClearColor(0x000011);
-        document.body.appendChild(renderer.domElement);
-    }
-    
-    // Create controls
-    if (!controls) {
-        controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-        controls.enableZoom = true;
-        controls.autoRotate = effectController.autoRotation;
-    }
-    
-    // Create stats
-    if (!stats) {
-        stats = new Stats();
-        stats.domElement.style.position = 'absolute';
-        stats.domElement.style.top = '0px';
-        stats.domElement.style.left = '0px';
-        document.body.appendChild(stats.domElement);
-    }
-}
-
-// Show Rust mode performance information
-function showRustModeInfo() {
-    // Create a performance overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'rust-performance-overlay';
-    overlay.style.cssText = `
-        position: absolute;
-        top: 60px;
-        left: 10px;
-        background: rgba(0, 20, 40, 0.9);
-        color: #4CAF50;
-        padding: 15px;
-        border-radius: 8px;
-        font-family: monospace;
-        font-size: 12px;
-        border: 1px solid #4CAF50;
-        z-index: 1000;
-    `;
-    
-    overlay.innerHTML = `
-        <div style="color: #fff; font-weight: bold; margin-bottom: 10px;">🦀 RUST MODE ACTIVE</div>
-        <div>Particles: <span id="rust-particle-count">-</span></div>
-        <div>FPS: <span id="rust-fps">-</span></div>
-        <div>Frame Time: <span id="rust-frame-time">-</span>ms</div>
-        <div>Performance Boost: <span style="color: #4CAF50;">50,000x</span></div>
-        <div style="margin-top: 10px; font-size: 10px; color: #aaa;">
-            Memory-mapped binary format<br>
-            SIMD-optimized physics<br>
-            Zero-copy data access
-        </div>
-    `;
-    
-    document.body.appendChild(overlay);
-    
-    // Update performance stats periodically
-    setInterval(async () => {
-        try {
-            const { SimulationAPI } = await import('./src/SimulationModeManager.js');
-            const stats = SimulationAPI.getStats();
-            
-            document.getElementById('rust-particle-count').textContent = stats.particleCount.toLocaleString();
-            document.getElementById('rust-fps').textContent = stats.fps || 0;
-            document.getElementById('rust-frame-time').textContent = (stats.frameTime || 0).toFixed(1);
-        } catch (error) {
-            // Ignore errors in stats update
-        }
-    }, 100);
+    // Try to fetch with the configured parameters
+    const url = `http://localhost:3001/playback/export?start=${playbackConfig.startFrame}&end=${playbackConfig.endFrame}&skip=${playbackConfig.frameSkip}`;
+    tryFetchPlaybackData(url, true);
 }
 
 // Initialize a basic Three.js scene for replay mode
@@ -437,7 +411,8 @@ function tryFetchPlaybackData(url, canRetry = true) {
             // Try the fallback URL if this was the first attempt
             if (canRetry) {
                 console.log('Trying fallback URL...');
-                tryFetchPlaybackData('http://127.0.0.1:3001/playback/export', false);
+                const fallbackUrl = `http://127.0.0.1:3001/playback/export?start=${playbackConfig.startFrame}&end=${playbackConfig.endFrame}&skip=${playbackConfig.frameSkip}`;
+                tryFetchPlaybackData(fallbackUrl, false);
             } else {
                 hideLoadingMessage();
                 alert('Failed to fetch playback data. Check browser console for details. Make sure the backend server is running at http://localhost:3001');
@@ -585,6 +560,9 @@ function createPlaybackControls() {
                 <div class="progress-handle" id="progressHandle"></div>
             </div>
             <div class="frame-info" id="frameInfo">Frame: 0/${playbackFrameNumbers.length-1}</div>
+            <div style="color: #888; font-size: 12px; margin-top: 5px;">
+                Frame Range: ${playbackConfig.startFrame} - ${playbackConfig.endFrame} | Skip: every ${playbackConfig.frameSkip} frame(s) | Downloaded: ${playbackFrameNumbers.length} frames
+            </div>
         </div>
     `;
     document.body.appendChild(controlsDiv);
@@ -775,7 +753,10 @@ function stopPlayback() {
 // Advance to the next frame
 function advancePlayback() {
     if (currentPlaybackFrame < playbackFrameNumbers.length - 1) {
-        showPlaybackFrame(currentPlaybackFrame + 1);
+        // Use configurable frame skip
+        const frameIncrement = playbackConfig.frameSkip;
+        const nextFrame = Math.min(currentPlaybackFrame + frameIncrement, playbackFrameNumbers.length - 1);
+        showPlaybackFrame(nextFrame);
         updateProgressUI();
     } else {
         // Reached the end, stop playback
@@ -795,38 +776,12 @@ function animate() {
         if (renderer && scene && camera) {
             renderer.render(scene, camera);
         }
-    } else if (selectedChoice === 4) {
-        // Rust mode - let the simulation manager handle updates
-        renderRustMode();
-    } else if (selectedChoice !== 3 && selectedChoice !== 4) {
+    } else if (selectedChoice !== 3) {
         // Normal simulation mode
         render();
     }
     
     if (stats) stats.update();
-}
-
-async function renderRustMode() {
-    try {
-        // Import the simulation manager
-        const { simulationManager } = await import('./src/SimulationModeManager.js');
-        
-        // Update simulation (this handles physics and position updates)
-        const deltaTime = 0.016; // Assume 60 FPS for now
-        simulationManager.update(deltaTime);
-        
-        // Render the scene
-        if (renderer && scene && camera) {
-            renderer.render(scene, camera);
-        }
-        
-    } catch (error) {
-        console.error('❌ Error in Rust mode rendering:', error);
-        // Fallback to basic rendering
-        if (renderer && scene && camera) {
-            renderer.render(scene, camera);
-        }
-    }
 }
 
 function render() {

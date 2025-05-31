@@ -350,24 +350,34 @@ app.post('/maintenance/clear', async (req, res) => {
   }
 });
 
-// Add endpoint to export the first 1000 frames as a Float32Array binary file for playback
+// Add endpoint to export frames as a Float32Array binary file for playback
 app.get('/playback/export', async (req, res) => {
   try {
+    // Get frame range from query parameters with defaults
+    const startFrame = parseInt(req.query.start || 0);
+    const endFrame = parseInt(req.query.end || startFrame + 2000);
+    const frameSkip = parseInt(req.query.skip || 1);
+    
     const client = await pool.connect();
     try {
-      // Query the first 1000 frames, ordered by frame_number and particle_index
+      // Log the request for monitoring
+      console.log(`📊 Exporting frames ${startFrame} to ${endFrame} with skip=${frameSkip} for playback`);
+      
+      // Query the frames with frame skipping logic - only get every Nth frame
       const result = await client.query(`
         SELECT frame_number, particle_index, x, y, z, vx, vy, vz
         FROM particle_snapshots
-        WHERE frame_number >= 0 AND frame_number < 1000
+        WHERE frame_number >= $1 AND frame_number <= $2 
+          AND (frame_number - $1) % $3 = 0
         ORDER BY frame_number ASC, particle_index ASC
-      `);
+      `, [startFrame, endFrame, frameSkip]);
       
       // Build a Float32Array: [frame_number, particle_index, x, y, z, vx, vy, vz, ...]
       const rowCount = result.rows.length;
       const floatsPerRow = 8;
       const buffer = new Float32Array(rowCount * floatsPerRow);
       
+      // Process query results efficiently
       for (let i = 0; i < rowCount; i++) {
         const r = result.rows[i];
         buffer[i * floatsPerRow + 0] = r.frame_number;
@@ -375,14 +385,19 @@ app.get('/playback/export', async (req, res) => {
         buffer[i * floatsPerRow + 2] = r.x;
         buffer[i * floatsPerRow + 3] = r.y;
         buffer[i * floatsPerRow + 4] = r.z;
-        buffer[i * floatsPerRow + 5] = r.vx;
-        buffer[i * floatsPerRow + 6] = r.vy;
-        buffer[i * floatsPerRow + 7] = r.vz;
+        buffer[i * floatsPerRow + 5] = r.vx || 0; // Use 0 as default if null
+        buffer[i * floatsPerRow + 6] = r.vy || 0;
+        buffer[i * floatsPerRow + 7] = r.vz || 0;
       }
       
+      // Create and send buffer with descriptive filename
+      const bufferToSend = Buffer.from(buffer.buffer);
+      const filename = `playback_${startFrame}-${endFrame}_skip${frameSkip}_${result.rowCount}particles.bin`;
+      
       res.setHeader('Content-Type', 'application/octet-stream');
-      res.setHeader('Content-Disposition', 'attachment; filename="playback_1000frames.bin"');
-      res.send(Buffer.from(buffer.buffer));
+      res.setHeader('Content-Length', bufferToSend.length);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(bufferToSend);
     } catch (e) {
       res.status(500).json({ status: 'error', message: e.toString() });
     } finally {
