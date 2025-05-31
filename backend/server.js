@@ -350,16 +350,59 @@ app.post('/maintenance/clear', async (req, res) => {
   }
 });
 
+// Add endpoint to export the first 1000 frames as a Float32Array binary file for playback
+app.get('/playback/export', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      // Query the first 1000 frames, ordered by frame_number and particle_index
+      const result = await client.query(`
+        SELECT frame_number, particle_index, x, y, z, vx, vy, vz
+        FROM particle_snapshots
+        WHERE frame_number >= 0 AND frame_number < 1000
+        ORDER BY frame_number ASC, particle_index ASC
+      `);
+      
+      // Build a Float32Array: [frame_number, particle_index, x, y, z, vx, vy, vz, ...]
+      const rowCount = result.rows.length;
+      const floatsPerRow = 8;
+      const buffer = new Float32Array(rowCount * floatsPerRow);
+      
+      for (let i = 0; i < rowCount; i++) {
+        const r = result.rows[i];
+        buffer[i * floatsPerRow + 0] = r.frame_number;
+        buffer[i * floatsPerRow + 1] = r.particle_index;
+        buffer[i * floatsPerRow + 2] = r.x;
+        buffer[i * floatsPerRow + 3] = r.y;
+        buffer[i * floatsPerRow + 4] = r.z;
+        buffer[i * floatsPerRow + 5] = r.vx;
+        buffer[i * floatsPerRow + 6] = r.vy;
+        buffer[i * floatsPerRow + 7] = r.vz;
+      }
+      
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', 'attachment; filename="playback_1000frames.bin"');
+      res.send(Buffer.from(buffer.buffer));
+    } catch (e) {
+      res.status(500).json({ status: 'error', message: e.toString() });
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ status: 'connection_failed', message: e.toString() });
+  }
+});
+
 // Server startup with health check
-const server = app.listen(3001, () => {
+const server = app.listen(3001, '0.0.0.0', () => {
   console.log('╔════════════════════════════════════════════════════╗');
   console.log('║                                                    ║');
   console.log('║        Galaxy Simulation Backend Server            ║');
   console.log('║       TimescaleDB-powered Data Collection          ║');
   console.log('║                                                    ║');
   console.log('╚════════════════════════════════════════════════════╝');
-  console.log('Server running on: http://localhost:3001');
-  console.log('Database status: http://localhost:3001/db_status');
+  console.log('Server running on: http://0.0.0.0:3001');
+  console.log('Database status: http://0.0.0.0:3001/db_status');
   console.log('\nPress Ctrl+C to stop the server');
 }).on('error', (err) => {
   console.error('❌ Server error:', err.message);

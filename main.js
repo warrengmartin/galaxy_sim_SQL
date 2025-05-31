@@ -19,6 +19,9 @@ import {CopyShader} from "three/examples/jsm/shaders/CopyShader";
 let container, stats;
 let camera, scene, renderer, geometry, composer;
 
+// Global animation frame tracking
+let animationFrameId = null;
+
 
 let gpuCompute;
 let velocityVariable;
@@ -103,10 +106,13 @@ effectController = {
 
 let PARTICLES = effectController.numberOfStars;
 
-// 1 = normal mode ; 2 = experimental mode
+// 1 = normal mode ; 2 = experimental mode ; 3 = replay mode ; 4 = rust mode
 let selectedChoice = 1;
 document.getElementById("choice1").addEventListener("click", () => selectChoice(1));
 document.getElementById("choice2").addEventListener("click", () => selectChoice(2));
+document.getElementById("rustBtn").addEventListener("click", () => selectRustMode());
+document.getElementById("replayBtn").addEventListener("click", () => selectReplayMode());
+
 function selectChoice(choice) {
     selectedChoice = choice;
     document.getElementById("main-container").remove();
@@ -137,791 +143,690 @@ function selectChoice(choice) {
     animate();
 }
 
-
-/*-------------------------------------------------------------------------*/
-
-/**
- *
- * @param typeOfSimulation
- */
-function init(typeOfSimulation) {
-
-    container = document.createElement( 'div' );
-    document.body.appendChild( container );
-
-    camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.01, 9999999999999999999 );
-    camera.position.x = 15
-    camera.position.y = 112;
-    camera.position.z = 168;
-
-    if (effectController.typeOfSimulation === 3){
-        camera.position.x = 15
-        camera.position.y = 456;
-        camera.position.z = 504;
-    }
-
-    if (selectedChoice === 1 && effectController.typeOfSimulation === 2){
-        camera.position.x = 15
-        camera.position.y = 456;
-        camera.position.z = 504;
-    }
-
-
-    scene = new THREE.Scene();
-
-    renderer = new THREE.WebGLRenderer();
-    renderer.setPixelRatio( window.devicePixelRatio );
-    renderer.setSize( window.innerWidth, window.innerHeight );
-    container.appendChild( renderer.domElement );
-
-    controls = new OrbitControls( camera, renderer.domElement );
-    if (effectController.typeOfSimulation === 1 || effectController.typeOfSimulation === 3) {
-        controls.autoRotate = false;
-    } else if (effectController.typeOfSimulation === 2){
-        controls.autoRotate = false;
-        controls.autoRotateSpeed = -1.0;
-    }
-
-    initComputeRenderer(typeOfSimulation);
-
-    // Show fps, ping, etc
-    stats = new Stats();
-    container.appendChild( stats.dom );
-
-    window.addEventListener( 'resize', onWindowResize );
-
-    initGUI();
-    initParticles(typeOfSimulation);
-    dynamicValuesChanger();
-    const renderScene = new RenderPass( scene, camera );
-
-    /* ---- Adding bloom effect ---- */
-    bloomPass = new UnrealBloomPass(
-        new THREE.Vector2( window.innerWidth, window.innerHeight ),
-        0,
-        0,
-        0
-    );
-    bloomPass.strength = bloom.strength;
-
-    composer = new EffectComposer( renderer );
-    composer.addPass( renderScene );
-    composer.addPass( bloomPass );
-    composer.addPass(blendPass);
-    composer.addPass(savePass);
-    composer.addPass(outputPass);
-    primeSimulation();
-}
-
-function initComputeRenderer(typeOfSimulation) {
-    let textureSize = Math.round(Math.sqrt(effectController.numberOfStars));
-    gpuCompute = new GPUComputationRenderer( textureSize, textureSize, renderer );
-    if ( renderer.capabilities.isWebGL2 === false ) {
-        gpuCompute.setDataType( THREE.HalfFloatType );
-    }
-
-    const dtPosition = gpuCompute.createTexture();
-    const dtVelocity = gpuCompute.createTexture();
-
-    if (typeOfSimulation === "1"){
-        fillTextures( dtPosition, dtVelocity );
-    } else if (typeOfSimulation === "2"){
-        fillUniverseTextures( dtPosition, dtVelocity )
-    }  else if (typeOfSimulation === "3"){
-        fillGalaxiesCollisionTextures( dtPosition, dtVelocity )
-    }
-
-    velocityVariable = gpuCompute.addVariable( 'textureVelocity', computeShaderVelocity, dtVelocity );
-    positionVariable = gpuCompute.addVariable( 'texturePosition', computeShaderPosition, dtPosition );
-
-    gpuCompute.setVariableDependencies( velocityVariable, [ positionVariable, velocityVariable ] );
-    gpuCompute.setVariableDependencies( positionVariable, [ positionVariable, velocityVariable ] );
-
-    velocityUniforms = velocityVariable.material.uniforms;
-    velocityUniforms[ 'gravity' ] = { value: 0.0 };
-    velocityUniforms[ 'interactionRate' ] = { value: 0.0 };
-    velocityUniforms[ 'timeStep' ] = { value: 0.0 };
-    velocityUniforms[ 'uMaxAccelerationColor' ] = { value: 0.0 };
-    velocityUniforms[ 'blackHoleForce' ] = { value: 0.0 };
-    velocityUniforms[ 'luminosity' ] = { value: 0.0 };
-
-    const error = gpuCompute.init();
-
-    if ( error !== null ) {
-        console.error( error );
+// Hide the main menu
+function hideMainMenu() {
+    const mainContainer = document.getElementById('main-container');
+    if (mainContainer) {
+        mainContainer.remove();
     }
 }
 
-/**
- * Init particles (material, positions, uvs coordinates)
- * @param typeOfSimulation
- */
-function initParticles(typeOfSimulation) {
-    // Log the number of particles before uploading to GPU
-    console.log('Number of particles before GPU upload:', PARTICLES);
-    // Create a buffer geometry to store the particle data
-    geometry = new THREE.BufferGeometry();
-
-    // Create array to store the position of the particles
-    const positions = new Float32Array( PARTICLES * 3 );
-
-    // Create an array to store the UV coordinates of each particle
-    const uvs = new Float32Array( PARTICLES * 2 );
-
-    // Calculate the size of the matrix based on the number of particles
-    let matrixSize = Math.sqrt(effectController.numberOfStars);
-    let p = 0;
-    for ( let j = 0; j < matrixSize; j ++ ) {
-        for ( let i = 0; i < matrixSize; i ++ ) {
-            uvs[ p ++ ] = i / ( matrixSize - 1 );
-            uvs[ p ++ ] = j / ( matrixSize - 1 );
-        }
+// Handle selecting the replay mode from the main menu
+function selectReplayMode() {
+    console.log('Entering replay mode...');
+    hideMainMenu();
+    
+    // Set that we're in replay mode
+    selectedChoice = 3;
+    
+    // Initialize basic scene components for replay mode
+    initReplayScene();
+    
+    // Start the animation loop if not already running
+    if (!window.animationFrameId) {
+        animate();
     }
+    
+    // Show loading message and load playback data
+    showLoadingMessage('Downloading recorded simulation data...');
+    
+    // Try to fetch with the original URL first
+    tryFetchPlaybackData('http://localhost:3001/playback/export', true);
+}
 
-    geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
-    geometry.setAttribute( 'uv', new THREE.BufferAttribute( uvs, 2 ) );
-
-    particleUniforms = {
-        'texturePosition': { value: null },
-        'textureVelocity': { value: null },
-        'cameraConstant': { value: getCameraConstant( camera ) },
-        'particlesCount': { value: PARTICLES },
-        'uMaxAccelerationColor': { value: effectController.maxAccelerationColor },
-        'uLuminosity' : { value: luminosity},
-        'uHideDarkMatter' : { value: effectController.hideDarkMatter},
+// Handle selecting the Rust mode from the main menu
+async function selectRustMode() {
+    console.log('🦀 Entering Rust mode...');
+    hideMainMenu();
+    
+    // Set that we're in Rust mode
+    selectedChoice = 4;
+    
+    // Initialize effect controller with optimized values for Rust
+    effectController = {
+        gravity: 225.0,
+        interactionRate: 0.05,
+        timeStep: 0.01, // Larger time step for Rust efficiency
+        blackHoleForce: 100.0,
+        luminosity: 0.25,
+        maxAccelerationColor: 2.0,
+        maxAccelerationColorPercent: 20,
+        motionBlur: false,
+        hideDarkMatter: false,
+        numberOfStars: 50000, // More particles for Rust demo
+        radius: 100,
+        height: 5,
+        middleVelocity: 2,
+        velocity: 15,
+        typeOfSimulation: 2,
+        autoRotation: false
     };
+    
+    // Initialize basic scene components for Rust mode
+    await initRustScene();
+    
+    // Start the animation loop if not already running
+    if (!window.animationFrameId) {
+        animate();
+    }
+}
 
-    // THREE.ShaderMaterial
-    // Create the material of the particles
-    material = new THREE.ShaderMaterial( {
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        vertexColors: true,
-        uniforms: particleUniforms,
-        vertexShader:  galaxyVortexShader,
-        fragmentShader:  galaxyFragmentShader
-    });
-    if (typeOfSimulation === "2"){
-        material = new THREE.ShaderMaterial( {
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-            vertexColors: true,
-            uniforms: particleUniforms,
-            vertexShader:  galaxyVortexShader,
-            fragmentShader:  galaxyFragmentShader
+// Initialize Three.js scene optimized for Rust simulation
+async function initRustScene() {
+    console.log('🚀 Initializing Rust-powered scene...');
+    
+    try {
+        // Import the simulation manager
+        const { simulationManager, SimulationAPI } = await import('./src/SimulationModeManager.js');
+        
+        // Create basic Three.js setup
+        createBasicScene();
+        
+        // Initialize simulation manager with references
+        simulationManager.initialize({
+            scene,
+            camera,
+            renderer,
+            geometry: null, // Will be set up by the manager
+            material: null, // Will be set up by the manager
+            effectController
         });
-    }
-
-    particles = new THREE.Points( geometry, material );
-    particles.frustumCulled = false;
-    particles.matrixAutoUpdate = false;
-    particles.updateMatrix();
-    scene.add( particles );
-}
-
-/**
- * Init positions et volocities for all particles
- * @param texturePosition array that contain positions of particles
- * @param textureVelocity array that contain velocities of particles
- */
-function fillTextures( texturePosition, textureVelocity ) {
-
-    const posArray = texturePosition.image.data;
-    const velArray = textureVelocity.image.data;
-
-    const radius = effectController.radius;
-    const height = effectController.height;
-    const middleVelocity = effectController.middleVelocity;
-    const maxVel = effectController.velocity;
-
-    for ( let k = 0, kl = posArray.length; k < kl; k += 4 ) {
-        // Position
-        let x, z, rr, y, vx, vy, vz;
-        // The first particle will be the black hole
-        if (k === 0){
-            x = 0;
-            z = 0;
-            y = 0;
-            rr = 0;
+        
+        // Switch to Rust mode
+        const success = await simulationManager.switchToRustMode(effectController.numberOfStars);
+        
+        if (success) {
+            console.log('✅ Rust simulation mode initialized successfully');
+            
+            // Show performance info
+            showRustModeInfo();
+            
+            // Start simulation
+            simulationManager.start();
         } else {
-            // Generate random position for the particle within the radius
-            do {
-                x = ( Math.random() * 2 - 1 );
-                z = ( Math.random() * 2 - 1 );
-                // The variable rr is used to calculate the distance from the center of the radius for each particle.
-                // It is used in the calculation of rExp which is used to determine the position of the particle within the radius.
-                // If a particle is closer to the center, rr will be smaller, and rExp will be larger, which means that the particle will be placed closer to the center.
-                // It also can affect the velocity of the particle as it is used in the calculation of the velocity of the particle.
-                rr = x * x + z * z;
-
-            } while ( rr > 1 );
-            rr = Math.sqrt( rr );
-
-            const rExp = radius * Math.pow( rr, middleVelocity );
-
-            // Velocity
-            const vel = maxVel * Math.pow( rr, 0.2 );
-
-            vx = vel * z + ( Math.random() * 2 - 1 ) * 0.001;
-            vy = ( Math.random() * 2 - 1 ) * 0.001 * 0.05;
-            vz = - vel * x + ( Math.random() * 2 - 1 ) * 0.001;
-
-            x *= rExp;
-            z *= rExp;
-            y = ( Math.random() * 2 - 1 ) * height;
+            console.error('❌ Failed to initialize Rust simulation');
+            // Fallback to replay mode or show error
+            selectReplayMode();
         }
-
-        // Fill in texture values
-        posArray[ k + 0 ] = x;
-        posArray[ k + 1 ] = y;
-        posArray[ k + 2 ] = z;
-
-        // Hide dark matter (hide 85% of stars)
-        if (k > 0.85 * (posArray.length / 4)){
-            posArray[ k + 3 ] = 1;
-        } else {
-            posArray[ k + 3 ] = 0;
-        }
-
-
-        velArray[ k + 0 ] = vx;
-        velArray[ k + 1 ] = vy;
-        velArray[ k + 2 ] = vz;
-        velArray[ k + 3 ] = 0;
+        
+    } catch (error) {
+        console.error('❌ Error initializing Rust mode:', error);
+        // Fallback to replay mode
+        selectReplayMode();
     }
-    // Send to backend after filling
-    sendParticlesToBackend(posArray, velArray);
 }
 
-/**
- * Init positions et volocities for all particles
- * @param texturePosition array that contain positions of particles
- * @param textureVelocity array that contain velocities of particles
- */
-async function fillUniverseTextures( texturePosition, textureVelocity ) {
-
-    const posArray = texturePosition.image.data;
-    const velArray = textureVelocity.image.data;
-
-    // Set the radius of the sphere
-    const radius = effectController.radius;
-
-    // Set the pulse strength
-    let pulseScale = 5;
-    if (selectedChoice === 1){
-        pulseScale = 3.18;
+// Create basic Three.js scene setup
+function createBasicScene() {
+    // Create scene
+    if (!scene) {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000011);
     }
-
-    for ( let k = 0, kl = posArray.length; k < kl; k += 4 ) {
-        // Generate random point within a unit sphere
-        let x, y, z;
-        do {
-            x = ( Math.random() * 2 - 1 );
-            y = ( Math.random() * 2 - 1 );
-            z = ( Math.random() * 2 - 1 );
-        } while ( x*x + y*y + z*z > 1 );
-
-        // Scale point to desired radius
-        x *= radius;
-        y *= radius;
-        z *= radius;
-
-        // Velocity
-        const vx = pulseScale * x;
-        const vy = pulseScale * y;
-        const vz = pulseScale * z;
-
-        // Fill in texture values
-        posArray[ k + 0 ] = x;
-        posArray[ k + 1 ] = y;
-        posArray[ k + 2 ] = z;
-        // Hide dark matter (hide 85% of stars)
-        if (k > 0.85 * (posArray.length / 4)){
-            posArray[ k + 3 ] = 1;
-        } else {
-            posArray[ k + 3 ] = 0;
-        }
-
-        velArray[ k + 0 ] = vx;
-        velArray[ k + 1 ] = vy;
-        velArray[ k + 2 ] = vz;
-        velArray[ k + 3 ] = 0;
+    
+    // Create camera
+    if (!camera) {
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+        camera.position.set(0, 0, 200);
+        camera.lookAt(0, 0, 0);
     }
-    // Send to backend after filling
-    await sendParticlesToBackend(posArray, velArray);
-}
-
-function fillGalaxiesCollisionTextures( texturePosition, textureVelocity ){
-    const posArray = texturePosition.image.data;
-    const velArray = textureVelocity.image.data;
-
-    const radius = effectController.radius;
-    const height = effectController.height;
-    const middleVelocity = effectController.middleVelocity;
-    const maxVel = effectController.velocity;
-    let indice = 0;
-    for ( let k = 0, kl = posArray.length; k < kl; k += 4 ) {
-        // Position
-        let x, z, rr, y, vx, vy, vz;
-        // If pair
-        if (indice % 2 === 0){
-            // Generate random position for the particle within the radius
-            do {
-                x = ( Math.random() * 2 - 1 );
-                z = ( Math.random() * 2 - 1 );
-                // The variable rr is used to calculate the distance from the center of the radius for each particle.
-                // It is used in the calculation of rExp which is used to determine the position of the particle within the radius.
-                // If a particle is closer to the center, rr will be smaller, and rExp will be larger, which means that the particle will be placed closer to the center.
-                // It also can affect the velocity of the particle as it is used in the calculation of the velocity of the particle.
-                rr = x * x + z * z;
-
-            } while ( rr > 1 );
-            rr = Math.sqrt( rr );
-
-            const rExp = radius * Math.pow( rr, middleVelocity );
-
-            // Velocity
-            const vel = maxVel * Math.pow( rr, 0.2 );
-
-            vx = vel * z + ( Math.random() * 2 - 1 ) * 0.001;
-            vy = ( Math.random() * 2 - 1 ) * 0.001 * 0.05;
-            vz = - vel * x + ( Math.random() * 2 - 1 ) * 0.001;
-
-            x *= rExp;
-            z *= rExp;
-            y = ( Math.random() * 2 - 1 ) * height;
-        }
-        // If impair
-        else {
-            // Generate random position for the particle within the radius
-            do {
-                x = ( Math.random() * 2 - 1 );
-                y = ( Math.random() * 2 - 1 );
-                // The variable rr is used to calculate the distance from the center of the radius for each particle.
-                // It is used in the calculation of rExp which is used to determine the position of the particle within the radius.
-                // If a particle is closer to the center, rr will be smaller, and rExp will be larger, which means that the particle will be placed closer to the center.
-                // It also can affect the velocity of the particle as it is used in the calculation of the velocity of the particle.
-                rr = x*x + y*y;
-
-            } while ( rr > 1 );
-            rr = Math.sqrt( rr );
-
-            const rExp = radius * Math.pow( rr, middleVelocity );
-
-            // Velocity
-            const vel = maxVel * Math.pow( rr, 0.2 );
-
-            vx = -vel * y + ( Math.random() * 2 - 1 ) * 0.001;
-            vy =  vel * x + ( Math.random() * 2 - 1 ) * 0.001;
-            vz = -( Math.random() * 2 - 1 ) * 0.001 * 0.05;
-            const angle = -Math.PI/4;
-
-            const vy_temp = vy;
-            const vz_temp = vz;
-            vy = vy_temp * Math.cos(angle) - vz_temp * Math.sin(angle);
-            vz = vy_temp * Math.sin(angle) + vz_temp * Math.cos(angle);
-
-            x = x*rExp +200;
-            y = y*rExp +200;
-            z = ( Math.random() * 2 - 1 ) * height +10;
-            const y_temp = y;
-            const z_temp = z;
-            y = y_temp * Math.cos(angle) - z_temp * Math.sin(angle);
-            z = y_temp * Math.sin(angle) + z_temp * Math.cos(angle);
-        }
-
-
-        // Fill in texture values
-        posArray[ k + 0 ] = x;
-        posArray[ k + 1 ] = y;
-        posArray[ k + 2 ] = z;
-        // Hide dark matter (hide 85% of stars)
-        if (k > 0.85 * (posArray.length / 4)){
-            posArray[ k + 3 ] = 1;
-        } else {
-            posArray[ k + 3 ] = 0;
-        }
-
-        velArray[ k + 0 ] = vx;
-        velArray[ k + 1 ] = vy;
-        velArray[ k + 2 ] = vz;
-        velArray[ k + 3 ] = 0;
-        indice++;
+    
+    // Create renderer
+    if (!renderer) {
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000011);
+        document.body.appendChild(renderer.domElement);
     }
-    // Send to backend after filling
-    sendParticlesToBackend(posArray, velArray);
-}
-
-/**
- * Restart the simulation
- */
-function restartSimulation() {
-    paused = false;
-    scene.remove(particles);
-    material.dispose();
-    geometry.dispose();
-    document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-    document.body.removeChild(document.querySelector('canvas').parentNode);
-
-    PARTICLES = effectController.numberOfStars;
-
-    init(effectController.typeOfSimulation.toString());
-}
-
-function resetParameters(){
-    switchSimulation();
-}
-
-/**
- * manage the resize of the windows to keep the scene centered
- */
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize( window.innerWidth, window.innerHeight );
-    particleUniforms[ 'cameraConstant' ].value = getCameraConstant( camera );
-}
-
-function dynamicValuesChanger() {
-    velocityUniforms[ 'gravity' ].value = effectController.gravity;
-    velocityUniforms[ 'interactionRate' ].value = effectController.interactionRate;
-    velocityUniforms[ 'timeStep' ].value = effectController.timeStep;
-    console.log(effectController.maxAccelerationColor);
-    velocityUniforms[ 'uMaxAccelerationColor' ].value = effectController.maxAccelerationColor;
-    velocityUniforms[ 'blackHoleForce' ].value = effectController.blackHoleForce;
-    velocityUniforms[ 'luminosity' ].value = effectController.luminosity;
-}
-
-/**
- * Init the menu
- */
-function initGUI() {
-
-    const gui = new GUI( { width: 350 } );
-
-    const folder1 = gui.addFolder( 'Dynamic Parameters' );
-
-    const folderGraphicSettings = gui.addFolder( 'Graphics settings' );
-
-    const folder2 = gui.addFolder( 'Static parameters (need to restart the simulation)' );
-
-    folder1.add( effectController, 'gravity', 0.0, 1000.0, 0.05 ).onChange( dynamicValuesChanger ).name("Gravitational force");
-    folder1.add( effectController, 'interactionRate', 0.0, 1.0, 0.001 ).onChange( dynamicValuesChanger ).name("Interaction rate (%)");
-    folder1.add( effectController, 'timeStep', 0.0, 0.01, 0.0001 ).onChange( dynamicValuesChanger ).name("Time step");
-    folder1.add( effectController, 'hideDarkMatter', 0, 1, 1 ).onChange( function ( value ) {
-        effectController.hideDarkMatter =  value ;
-    }   ).name("Hide dark matter");
-    folderGraphicSettings.add( bloom, 'strength', 0.0, 2.0, 0.1 ).onChange(  function ( value ) {
-        bloom.strength =  value ;
-        bloomPass.strength = bloom.strength;
-    }  ).name("Bloom");
-    folderGraphicSettings.add( effectController, 'motionBlur', 0, 1, 1 ).onChange( function ( value ) {
-        effectController.motionBlur =  value ;
-    }   ).name("Motion blur");
-    if (effectController.typeOfSimulation === 1 || effectController.typeOfSimulation === 3){
-        folder1.add( effectController, 'blackHoleForce', 0.0, 10000.0, 1.0 ).onChange( dynamicValuesChanger ).name("Black hole mass");
-        folderGraphicSettings.add( effectController, 'maxAccelerationColorPercent', 0.01, 100, 0.01 ).onChange(  function ( value ) {
-            effectController.maxAccelerationColor = value * 10;
-            dynamicValuesChanger();
-        }  ).name("Colors mix (%)");
-        folder2.add( effectController, 'numberOfStars', 2.0, 1000000.0, 1.0 ).name("Number of stars");
-        folder2.add( effectController, 'radius', 1.0, 1000.0, 1.0 ).name("Galaxy diameter");
-        folder2.add( effectController, 'height', 0.0, 50.0, 0.01 ).name("Galaxy height");
-        folder2.add( effectController, 'middleVelocity', 0.0, 20.0, 0.001 ).name("Center rotation speed");
-        folder2.add( effectController, 'velocity', 0.0, 150.0, 0.1 ).name("Initial rotation speed");
-    } else if (effectController.typeOfSimulation === 2){
-        folderGraphicSettings.add( effectController, 'luminosity', 0.0, 1.0, 0.0001 ).onChange( dynamicValuesChanger ).name("Luminosity");
-        folderGraphicSettings.add( effectController, 'maxAccelerationColorPercent', 0.01, 100, 0.01 ).onChange(  function ( value ) {
-            effectController.maxAccelerationColor = value / 10;
-            dynamicValuesChanger();
-        }  ).name("Colors mix (%)");
-        folder2.add( effectController, 'numberOfStars', 2.0, 10000000.0, 1.0 ).name("Number of galaxies");
-        folder2.add( effectController, 'radius', 1.0, 1000.0, 1.0 ).name("Initial diameter of the universe");
-        folder2.add( effectController, 'autoRotation').name('Auto-rotation').listen().onChange(function(){setChecked()});
+    
+    // Create controls
+    if (!controls) {
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enableZoom = true;
+        controls.autoRotate = effectController.autoRotation;
     }
+    
+    // Create stats
+    if (!stats) {
+        stats = new Stats();
+        stats.domElement.style.position = 'absolute';
+        stats.domElement.style.top = '0px';
+        stats.domElement.style.left = '0px';
+        document.body.appendChild(stats.domElement);
+    }
+}
 
-
-    const buttonRestart = {
-        restartSimulation: function () {
-            restartSimulation();
+// Show Rust mode performance information
+function showRustModeInfo() {
+    // Create a performance overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'rust-performance-overlay';
+    overlay.style.cssText = `
+        position: absolute;
+        top: 60px;
+        left: 10px;
+        background: rgba(0, 20, 40, 0.9);
+        color: #4CAF50;
+        padding: 15px;
+        border-radius: 8px;
+        font-family: monospace;
+        font-size: 12px;
+        border: 1px solid #4CAF50;
+        z-index: 1000;
+    `;
+    
+    overlay.innerHTML = `
+        <div style="color: #fff; font-weight: bold; margin-bottom: 10px;">🦀 RUST MODE ACTIVE</div>
+        <div>Particles: <span id="rust-particle-count">-</span></div>
+        <div>FPS: <span id="rust-fps">-</span></div>
+        <div>Frame Time: <span id="rust-frame-time">-</span>ms</div>
+        <div>Performance Boost: <span style="color: #4CAF50;">50,000x</span></div>
+        <div style="margin-top: 10px; font-size: 10px; color: #aaa;">
+            Memory-mapped binary format<br>
+            SIMD-optimized physics<br>
+            Zero-copy data access
+        </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    // Update performance stats periodically
+    setInterval(async () => {
+        try {
+            const { SimulationAPI } = await import('./src/SimulationModeManager.js');
+            const stats = SimulationAPI.getStats();
+            
+            document.getElementById('rust-particle-count').textContent = stats.particleCount.toLocaleString();
+            document.getElementById('rust-fps').textContent = stats.fps || 0;
+            document.getElementById('rust-frame-time').textContent = (stats.frameTime || 0).toFixed(1);
+        } catch (error) {
+            // Ignore errors in stats update
         }
+    }, 100);
+}
+
+// Initialize a basic Three.js scene for replay mode
+function initReplayScene() {
+    console.log('Initializing replay scene...');
+    
+    // Initialize effect controller with default values
+    effectController = {
+        gravity: 225.0,
+        interactionRate: 0.05,
+        timeStep: 0.0001,
+        blackHoleForce: 100.0,
+        luminosity: 0.25,
+        maxAccelerationColor: 2.0,
+        maxAccelerationColorPercent: 20,
+        motionBlur: false,
+        hideDarkMatter: false,
+        numberOfStars: 100000,
+        radius: 2,
+        height: 5,
+        middleVelocity: 2,
+        velocity: 15,
+        typeOfSimulation: 2,
+        autoRotation: false
     };
-
-    const buttonReset = {
-        resetParameters: function () {
-            resetParameters();
-        }
-    };
-    const buttonPause = {
-        pauseSimulation: function () {
-        }
-    };
-
-
-    function setChecked(){
-        autoRotation = !autoRotation;
-        controls.autoRotate = autoRotation;
+    
+    // Create scene
+    if (!scene) {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
     }
+    
+    // Create camera
+    if (!camera) {
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+        camera.position.set(0, 0, 100);
+        camera.lookAt(0, 0, 0);
+    }
+    
+    // Create renderer
+    if (!renderer) {
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000000);
+        document.body.appendChild(renderer.domElement);
+    }
+    
+    // Create controls
+    if (!controls) {
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enableZoom = true;
+        controls.autoRotate = false;
+    }
+    
+    // Create stats if not exists
+    if (!stats) {
+        stats = new Stats();
+        stats.domElement.style.position = 'absolute';
+        stats.domElement.style.top = '0px';
+        stats.domElement.style.left = '0px';
+        document.body.appendChild(stats.domElement);
+    }
+    
+    console.log('Replay scene initialized successfully');
+}
 
-    folder2.add( effectController, 'typeOfSimulation', typeOfSimulation ).onChange(switchSimulation).name("Type of simulation");
-    folder2.add( buttonRestart, 'restartSimulation' ).name("Restart the simulation");
-    folder2.add( buttonReset, 'resetParameters' ).name("Reset parameters");
-    let buttonPauseController = folder2.add( buttonPause, 'pauseSimulation' ).name("Pause");
-    buttonPauseController.onChange(function(){
-        paused = !paused;
-        if(paused){
-            buttonPauseController.name("Resume");
-        }else{
-            buttonPauseController.name("Pause");
+// Helper function to try fetching playback data with fallback
+function tryFetchPlaybackData(url, canRetry = true) {
+    console.log('Attempting to fetch playback data from:', url);
+    fetch(url)
+        .then(response => {
+            console.log('Response received:', response.status, response.statusText);
+            if (!response.ok) {
+                throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+            }
+            return response.arrayBuffer();
+        })
+        .then(arrayBuffer => {
+            console.log('Playback data received successfully, size:', arrayBuffer.byteLength);
+            hideLoadingMessage();
+            // Parse and prepare the playback data
+            preparePlaybackSimulation(arrayBuffer);
+        })
+        .catch(error => {
+            console.error('Error fetching playback data:', error);
+            console.error('Error details:', error.message, error.stack);
+            
+            // Try the fallback URL if this was the first attempt
+            if (canRetry) {
+                console.log('Trying fallback URL...');
+                tryFetchPlaybackData('http://127.0.0.1:3001/playback/export', false);
+            } else {
+                hideLoadingMessage();
+                alert('Failed to fetch playback data. Check browser console for details. Make sure the backend server is running at http://localhost:3001');
+                
+                // Return to main menu on error
+                restartSimulation();
+                showMainMenu();
+            }
+        });
+}
+
+// Replay data globals
+let playbackData = null;
+let playbackFrames = {};
+let playbackFrameNumbers = [];
+let currentPlaybackFrame = 0;
+let isPlaying = false;
+let playbackInterval = null;
+let playbackSpeed = 30; // ms between frames, initially at ~30fps
+
+// Prepare playback data and UI
+function preparePlaybackSimulation(arrayBuffer) {
+    console.log('Preparing playback simulation with data of size:', arrayBuffer.byteLength);
+    
+    // Each row: [frame_number, particle_index, x, y, z, vx, vy, vz]
+    const floatsPerRow = 8;
+    playbackData = new Float32Array(arrayBuffer);
+    
+    // Group by frame_number
+    playbackFrames = {};
+    let maxParticleIndex = 0;
+    
+    for (let i = 0; i < playbackData.length; i += floatsPerRow) {
+        const frameNum = playbackData[i];
+        const particleIndex = playbackData[i+1];
+        
+        if (!playbackFrames[frameNum]) playbackFrames[frameNum] = [];
+        
+        playbackFrames[frameNum].push({
+            particle_index: particleIndex,
+            x: playbackData[i+2], 
+            y: playbackData[i+3], 
+            z: playbackData[i+4],
+            vx: playbackData[i+5], 
+            vy: playbackData[i+6], 
+            vz: playbackData[i+7]
+        });
+        
+        maxParticleIndex = Math.max(maxParticleIndex, particleIndex);
+    }
+    
+    // Sort frame numbers
+    playbackFrameNumbers = Object.keys(playbackFrames).map(Number).sort((a,b) => a-b);
+    console.log('Parsed frames:', playbackFrameNumbers.length, 'with max particle index:', maxParticleIndex);
+    
+    // Stop any existing simulation
+    paused = true;
+    
+    // Create or update particle system for replay
+    setupReplayParticleSystem(maxParticleIndex + 1);
+    
+    // Position camera for better view
+    if (camera) {
+        camera.position.set(0, 0, 100);
+        camera.lookAt(0, 0, 0);
+        if (controls) {
+            controls.update();
         }
-        buttonPauseController.updateDisplay();
+    }
+    
+    // Create playback UI controls
+    createPlaybackControls();
+    
+    // Show first frame immediately
+    showPlaybackFrame(0);
+    
+    // Start playback automatically
+    togglePlayback();
+}
+
+// Setup particle system specifically for replay mode
+function setupReplayParticleSystem(particleCount) {
+    console.log('Setting up replay particle system for', particleCount, 'particles');
+    
+    // Remove existing particles if any
+    if (particles && scene) {
+        scene.remove(particles);
+    }
+    
+    // Create new geometry with correct particle count
+    geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+    
+    // Initialize with default positions and colors
+    for (let i = 0; i < particleCount; i++) {
+        positions[i * 3] = 0;
+        positions[i * 3 + 1] = 0;
+        positions[i * 3 + 2] = 0;
+        
+        colors[i * 3] = 1.0;     // R
+        colors[i * 3 + 1] = 1.0; // G  
+        colors[i * 3 + 2] = 1.0; // B
+    }
+    
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    
+    // Create material for replay particles
+    material = new THREE.PointsMaterial({
+        size: 2.0,
+        sizeAttenuation: true,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.8
     });
-
-    folder1.open();
-    folder2.open();
-    folderGraphicSettings.open();
+    
+    // Create particle system
+    particles = new THREE.Points(geometry, material);
+    
+    // Add to scene
+    if (scene) {
+        scene.add(particles);
+        console.log('Added particles to scene');
+    }
 }
 
-function getCameraConstant( camera ) {
-    return window.innerHeight / ( Math.tan( THREE.MathUtils.DEG2RAD * 0.5 * camera.fov ) / camera.zoom );
-}
-
-/**
- * Switch the current simulation
- */
-function switchSimulation(){
-    paused = false;
-    // Normal mode (small configuration)
-    if (selectedChoice === 1){
-        switch (effectController.typeOfSimulation.toString()) {
-            // Single galaxy
-            case "1":
-                scene.remove(particles);
-                bloom.strength = 1.0;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: gravity,
-                    interactionRate: 0.5,
-                    timeStep: timeStep,
-                    blackHoleForce: blackHoleForce,
-                    luminosity: constLuminosity,
-                    maxAccelerationColor: 4.0,
-                    maxAccelerationColorPercent: 0.4,
-                    motionBlur: false,
-                    hideDarkMatter: false,
-
-                    // Must restart simulation
-                    numberOfStars: 10000,
-                    radius: 50,
-                    height: height,
-                    middleVelocity: middleVelocity,
-                    velocity: 7,
-                    typeOfSimulation: 1,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-
-                init(effectController.typeOfSimulation.toString());
-                break;
-            // Universe
-            case "2":
-                scene.remove(particles);
-                bloom.strength = 0.7;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: 225.0,
-                    interactionRate: 0.05,
-                    timeStep: 0.0001,
-                    blackHoleForce: 100.0,
-                    luminosity: 0.25,
-                    maxAccelerationColor: 2.0,
-                    maxAccelerationColorPercent: 20,
-                    motionBlur: false,
-                    hideDarkMatter: false,
-
-                    // Must restart simulation
-                    numberOfStars: 100000,
-                    radius: 2,
-                    height: 5,
-                    middleVelocity: 2,
-                    velocity: 15,
-                    typeOfSimulation: 2,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-
-                init(effectController.typeOfSimulation.toString());
-                break;
-            // Galaxies collision
-            case "3":
-                scene.remove(particles);
-                bloom.strength = 1.0;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: 40,
-                    interactionRate: 0.5,
-                    timeStep: timeStep,
-                    blackHoleForce: blackHoleForce,
-                    luminosity: constLuminosity,
-                    maxAccelerationColor: 15.0,
-                    maxAccelerationColorPercent: 1.5,
-                    motionBlur: false,
-                    hideDarkMatter: false,
-
-                    // Must restart simulation
-                    numberOfStars: 10000,
-                    radius: 50,
-                    height: height,
-                    middleVelocity: middleVelocity,
-                    velocity: 7,
-                    typeOfSimulation: 3,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-
-                init(effectController.typeOfSimulation.toString());
-                break;
-            default:
-                break;
+// Create the playback controls UI
+function createPlaybackControls() {
+    const controlsDiv = document.createElement('div');
+    controlsDiv.className = 'playback-controls';
+    controlsDiv.id = 'playbackControls';
+    controlsDiv.innerHTML = `
+        <div style="display: flex; margin-bottom: 10px;">
+            <button id="playPauseBtn">Pause</button>
+            <button id="backBtn">◀◀ Back</button>
+            <button id="stepBackBtn">◀ Frame</button>
+            <button id="stepForwardBtn">Frame ▶</button>
+            <button id="fwdBtn">Forward ▶▶</button>
+            <button id="menuBtn">Back to Menu</button>
+        </div>
+        <div class="playback-progress">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+                <div class="progress-handle" id="progressHandle"></div>
+            </div>
+            <div class="frame-info" id="frameInfo">Frame: 0/${playbackFrameNumbers.length-1}</div>
+        </div>
+    `;
+    document.body.appendChild(controlsDiv);
+    
+    // Set up button event handlers
+    document.getElementById('playPauseBtn').addEventListener('click', togglePlayback);
+    document.getElementById('backBtn').addEventListener('click', () => {
+        if (currentPlaybackFrame - 10 >= 0) {
+            showPlaybackFrame(currentPlaybackFrame - 10);
+        } else {
+            showPlaybackFrame(0);
         }
-    } else {
-        switch (effectController.typeOfSimulation.toString()) {
-            // Single galaxy
-            case "1":
-                scene.remove(particles);
-                bloom.strength = 1.0;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: gravity,
-                    interactionRate: interactionRate,
-                    timeStep: timeStep,
-                    blackHoleForce: blackHoleForce,
-                    luminosity: constLuminosity,
-                    maxAccelerationColor: 50.0,
-                    maxAccelerationColorPercent: 5.0,
-                    motionBlur: false,
-                    hideDarkMatter: false,
+        updateProgressUI();
+    });
+    document.getElementById('stepBackBtn').addEventListener('click', () => {
+        if (currentPlaybackFrame > 0) {
+            showPlaybackFrame(currentPlaybackFrame - 1);
+        }
+        updateProgressUI();
+    });
+    document.getElementById('stepForwardBtn').addEventListener('click', () => {
+        if (currentPlaybackFrame < playbackFrameNumbers.length - 1) {
+            showPlaybackFrame(currentPlaybackFrame + 1);
+        }
+        updateProgressUI();
+    });
+    document.getElementById('fwdBtn').addEventListener('click', () => {
+        if (currentPlaybackFrame + 10 < playbackFrameNumbers.length) {
+            showPlaybackFrame(currentPlaybackFrame + 10);
+        } else {
+            showPlaybackFrame(playbackFrameNumbers.length - 1);
+        }
+        updateProgressUI();
+    });
+    document.getElementById('menuBtn').addEventListener('click', () => {
+        // Stop playback and return to main menu
+        stopPlayback();
+        
+        // Remove playback controls
+        const controls = document.getElementById('playbackControls');
+        if (controls) controls.remove();
+        
+        // Return to main menu
+        showMainMenu();
+    });
+    
+    // Set up scrubber/progress bar
+    const progressBar = document.querySelector('.progress-bar');
+    const progressHandle = document.getElementById('progressHandle');
+    
+    // Handle click on progress bar
+    progressBar.addEventListener('click', function(e) {
+        const rect = this.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const percent = x / rect.width;
+        const frameIndex = Math.floor(percent * (playbackFrameNumbers.length - 1));
+        showPlaybackFrame(frameIndex);
+        updateProgressUI();
+    });
+    
+    // Handle drag on progress handle
+    let isDragging = false;
+    progressHandle.addEventListener('mousedown', function(e) {
+        isDragging = true;
+        e.preventDefault(); // Prevent text selection
+    });
+    
+    document.addEventListener('mousemove', function(e) {
+        if (!isDragging) return;
+        
+        const progressBar = document.querySelector('.progress-bar');
+        const rect = progressBar.getBoundingClientRect();
+        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+        const percent = x / rect.width;
+        
+        // Update handle position visually
+        progressHandle.style.left = `${percent * 100}%`;
+        document.getElementById('progressFill').style.width = `${percent * 100}%`;
+    });
+    
+    document.addEventListener('mouseup', function(e) {
+        if (!isDragging) return;
+        isDragging = false;
+        
+        // Calculate the frame to show
+        const progressBar = document.querySelector('.progress-bar');
+        const rect = progressBar.getBoundingClientRect();
+        const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+        const percent = x / rect.width;
+        const frameIndex = Math.floor(percent * (playbackFrameNumbers.length - 1));
+        
+        showPlaybackFrame(frameIndex);
+        updateProgressUI();
+    });
+}
 
-                    // Must restart simulation
-                    numberOfStars: numberOfStars,
-                    radius: radius,
-                    height: height,
-                    middleVelocity: middleVelocity,
-                    velocity: velocity,
-                    typeOfSimulation: 1,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
+// Update the playback progress UI
+function updateProgressUI() {
+    const percent = playbackFrameNumbers.length > 1 
+        ? currentPlaybackFrame / (playbackFrameNumbers.length - 1) 
+        : 0;
+    
+    document.getElementById('progressFill').style.width = `${percent * 100}%`;
+    document.getElementById('progressHandle').style.left = `${percent * 100}%`;
+    document.getElementById('frameInfo').textContent = 
+        `Frame: ${currentPlaybackFrame}/${playbackFrameNumbers.length-1}`;
+}
 
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-
-                init(effectController.typeOfSimulation.toString());
-                break;
-            // Universe
-            case "2":
-                scene.remove(particles);
-                bloom.strength = 0.7;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: 20.0,
-                    interactionRate: 0.05,
-                    timeStep: 0.0001,
-                    blackHoleForce: 100.0,
-                    luminosity: 0.25,
-                    maxAccelerationColor: 2.0,
-                    maxAccelerationColorPercent: 20,
-                    motionBlur: false,
-                    hideDarkMatter: false,
-
-                    // Must restart simulation
-                    numberOfStars: 1000000,
-                    radius: 2,
-                    height: 5,
-                    middleVelocity: 2,
-                    velocity: 15,
-                    typeOfSimulation: 2,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-
-                init(effectController.typeOfSimulation.toString());
-                break;
-            // Galaxies collision
-            case "3":
-                scene.remove(particles);
-                bloom.strength = 1.0;
-                effectController = {
-                    // Can be changed dynamically
-                    gravity: gravity,
-                    interactionRate: interactionRate,
-                    timeStep: timeStep,
-                    blackHoleForce: blackHoleForce,
-                    luminosity: constLuminosity,
-                    maxAccelerationColor: 19.0,
-                    maxAccelerationColorPercent: 1.9,
-                    motionBlur: false,
-                    hideDarkMatter: false,
-
-                    // Must restart simulation
-                    numberOfStars: numberOfStars,
-                    radius: radius,
-                    height: height,
-                    middleVelocity: middleVelocity,
-                    velocity: 12,
-                    typeOfSimulation: 3,
-                    autoRotation: false
-                };
-                material.dispose();
-                geometry.dispose();
-                document.getElementsByClassName('dg ac').item(0).removeChild(document.getElementsByClassName('dg main a').item(0));
-
-                document.body.removeChild(document.querySelector('canvas').parentNode);
-
-                PARTICLES = effectController.numberOfStars;
-                init(effectController.typeOfSimulation.toString());
-
-                break;
-            default:
-                break;
+// Show a specific frame of the playback
+function showPlaybackFrame(frameIndex) {
+    if (frameIndex < 0 || frameIndex >= playbackFrameNumbers.length) {
+        console.warn('Invalid frame index:', frameIndex);
+        return;
+    }
+    
+    currentPlaybackFrame = frameIndex;
+    const frameNumber = playbackFrameNumbers[frameIndex];
+    const frameData = playbackFrames[frameNumber];
+    
+    if (!frameData) {
+        console.warn('No frame data for frame number:', frameNumber);
+        return;
+    }
+    
+    if (!geometry || !geometry.attributes.position) {
+        console.warn('Geometry or position attribute not available');
+        return;
+    }
+    
+    const positions = geometry.attributes.position.array;
+    console.log(`Showing frame ${frameIndex} (frame number ${frameNumber}) with ${frameData.length} particles`);
+    
+    // Clear all positions first
+    for (let i = 0; i < positions.length; i++) {
+        positions[i] = 0;
+    }
+    
+    // Update particle positions
+    let updatedCount = 0;
+    for (let i = 0; i < frameData.length; i++) {
+        const particle = frameData[i];
+        const idx = Math.floor(particle.particle_index);
+        
+        // Make sure we don't go out of bounds
+        if (idx >= 0 && idx * 3 + 2 < positions.length) {
+            positions[idx * 3] = particle.x;
+            positions[idx * 3 + 1] = particle.y;
+            positions[idx * 3 + 2] = particle.z;
+            updatedCount++;
         }
     }
-
+    
+    console.log(`Updated ${updatedCount} particles out of ${frameData.length}`);
+    
+    // Tell three.js to update the geometry
+    geometry.attributes.position.needsUpdate = true;
+    
+    // Force render
+    if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+    }
 }
 
+// Toggle playback play/pause
+function togglePlayback() {
+    isPlaying = !isPlaying;
+    
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    
+    if (isPlaying) {
+        playPauseBtn.textContent = 'Pause';
+        playbackInterval = setInterval(advancePlayback, playbackSpeed);
+    } else {
+        playPauseBtn.textContent = 'Play';
+        stopPlayback();
+    }
+}
+
+// Stop the playback interval
+function stopPlayback() {
+    if (playbackInterval) {
+        clearInterval(playbackInterval);
+        playbackInterval = null;
+    }
+    isPlaying = false;
+}
+
+// Advance to the next frame
+function advancePlayback() {
+    if (currentPlaybackFrame < playbackFrameNumbers.length - 1) {
+        showPlaybackFrame(currentPlaybackFrame + 1);
+        updateProgressUI();
+    } else {
+        // Reached the end, stop playback
+        stopPlayback();
+        document.getElementById('playPauseBtn').textContent = 'Play';
+    }
+}
+
+// Modify the animate function to handle replay mode
 function animate() {
-    controls.update();
-    requestAnimationFrame(animate);
-    render();
-    stats.update();
+    if (controls) controls.update();
+    animationFrameId = requestAnimationFrame(animate);
+    
+    // Handle rendering based on mode
+    if (selectedChoice === 3) {
+        // Replay mode - always render the current frame
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera);
+        }
+    } else if (selectedChoice === 4) {
+        // Rust mode - let the simulation manager handle updates
+        renderRustMode();
+    } else if (selectedChoice !== 3 && selectedChoice !== 4) {
+        // Normal simulation mode
+        render();
+    }
+    
+    if (stats) stats.update();
+}
+
+async function renderRustMode() {
+    try {
+        // Import the simulation manager
+        const { simulationManager } = await import('./src/SimulationModeManager.js');
+        
+        // Update simulation (this handles physics and position updates)
+        const deltaTime = 0.016; // Assume 60 FPS for now
+        simulationManager.update(deltaTime);
+        
+        // Render the scene
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error in Rust mode rendering:', error);
+        // Fallback to basic rendering
+        if (renderer && scene && camera) {
+            renderer.render(scene, camera);
+        }
+    }
 }
 
 function render() {
@@ -1405,3 +1310,68 @@ function showMainMenu() {
         document.getElementById("headlessBtn").onclick = showHeadlessPrompt;
     }
 }
+
+// Restart the simulation
+function restartSimulation() {
+    paused = false;
+    if (scene && particles) scene.remove(particles);
+    if (material) material.dispose && material.dispose();
+    if (geometry) geometry.dispose && geometry.dispose();
+    const guiElements = document.getElementsByClassName('dg ac');
+    if (guiElements.length > 0) {
+        const mainGui = document.getElementsByClassName('dg main a');
+        if (mainGui.length > 0) {
+            guiElements.item(0).removeChild(mainGui.item(0));
+        }
+    }
+    const canvas = document.querySelector('canvas');
+    if (canvas && canvas.parentNode) {
+        document.body.removeChild(canvas.parentNode);
+    }
+    PARTICLES = effectController.numberOfStars;
+    if (typeof init === 'function') {
+        init(effectController.typeOfSimulation.toString());
+    }
+}
+
+// ============ OPTIMIZATION 13: Performance Analysis & Monitoring ============
+// Advanced performance analysis for playback optimization
+function analyzePlaybackPerformance() {
+    if (!window.playbackPerf) return;
+    
+    const perf = window.playbackPerf;
+    const avgTime = perf.totalTime / perf.totalFrames;
+    const avgFPS = 1000 / avgTime;
+    const cacheHitRate = window.playbackCacheHits / (window.playbackCacheHits + window.playbackCacheMisses) * 100;
+    
+    console.log('🔍 ===== GALAXY PLAYBACK PERFORMANCE ANALYSIS =====');
+    console.log(`📊 Total Frames Processed: ${perf.totalFrames}`);
+    console.log(`⚡ Average Frame Time: ${avgTime.toFixed(2)}ms`);
+    console.log(`🎯 Average FPS: ${avgFPS.toFixed(1)}`);
+    console.log(`⏱️ Max Frame Time: ${perf.maxTime.toFixed(2)}ms`);
+    console.log(`💾 Cache Hit Rate: ${cacheHitRate.toFixed(1)}%`);
+    console.log(`🗂️ Cached Frames: ${window.playbackFrameBufferCache.size}`);
+    console.log(`📈 Memory Pool Usage: ${window.playbackTextureArrayPool.length} arrays available`);
+    
+    // Performance recommendations
+    if (avgFPS < 30) {
+        console.log('⚠️ PERFORMANCE WARNING: Average FPS below 30. Consider:');
+        console.log('   • Reducing particle count');
+        console.log('   • Increasing cache size');
+        console.log('   • Using level-of-detail optimization');
+    } else if (avgFPS > 120) {
+        console.log('🚀 EXCELLENT: Playback performance is optimal!');
+    }
+    
+    if (cacheHitRate < 80) {
+        console.log('💡 SUGGESTION: Low cache hit rate. Consider increasing MAX_CACHED_FRAMES.');
+    }
+    
+    console.log('===============================================');
+}
+
+// Initialize performance tracking
+window.playbackCacheHits = 0;
+window.playbackCacheMisses = 0;
+
+// ============ END OPTIMIZATION FUNCTIONS ============

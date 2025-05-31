@@ -21,6 +21,16 @@ cleanup() {
         rm backend.pid 2>/dev/null
     fi
     
+    # Extra: If port 3001 is still open, try to kill any node process using it
+    if netstat -tuln | grep -q ":3001 "; then
+        echo -e "${YELLOW}Port 3001 still open after cleanup. Attempting force kill...${NC}"
+        PID_TO_KILL=$(lsof -i :3001 -t 2>/dev/null | head -n 1)
+        if [ ! -z "$PID_TO_KILL" ]; then
+            echo -e "${YELLOW}Killing process on port 3001 (PID $PID_TO_KILL)...${NC}"
+            kill -9 $PID_TO_KILL 2>/dev/null
+        fi
+    fi
+    
     # Kill frontend if PID file exists
     if [ -f "frontend.pid" ]; then
         FRONTEND_PID=$(cat frontend.pid)
