@@ -113,6 +113,7 @@ let selectedChoice = 1;
 document.getElementById("choice1").addEventListener("click", () => selectChoice(1));
 document.getElementById("choice2").addEventListener("click", () => selectChoice(2));
 document.getElementById("replayBtn").addEventListener("click", () => selectReplayMode());
+document.getElementById("sqlViewBtn").addEventListener("click", () => selectSQLView());
 
 function selectChoice(choice) {
     selectedChoice = choice;
@@ -1330,3 +1331,439 @@ window.playbackCacheHits = 0;
 window.playbackCacheMisses = 0;
 
 // ============ END OPTIMIZATION FUNCTIONS ============
+// Handle selecting the SQL view from the main menu
+function selectSQLView() {
+    console.log('Opening SQL Database View...');
+    hideMainMenu();
+    
+    // Set mode to SQL view (using mode 4)
+    selectedChoice = 4;
+    
+    // Create SQL view interface
+    createSQLViewInterface();
+}
+
+// Create the SQL query interface
+function createSQLViewInterface() {
+    // Create main container
+    const sqlContainer = document.createElement('div');
+    sqlContainer.id = 'sql-view-container';
+    sqlContainer.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #0a0a0a;
+        color: white;
+        font-family: 'Courier New', monospace;
+        overflow: hidden;
+        z-index: 1000;
+    `;
+    
+    // Create header
+    const header = document.createElement('div');
+    header.style.cssText = `
+        background: linear-gradient(45deg, #1a1a2e, #16213e);
+        padding: 20px;
+        border-bottom: 2px solid #4a9eff;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    `;
+    header.innerHTML = `
+        <h1 style="margin: 0; color: #4a9eff; font-size: 24px;">🗄️ Galaxy Simulation Database Query Interface</h1>
+        <button id="backToMenuBtn" style="
+            background: #666;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        ">← Back to Menu</button>
+    `;
+    
+    // Create main content area
+    const content = document.createElement('div');
+    content.style.cssText = `
+        display: flex;
+        height: calc(100% - 84px);
+    `;
+    
+    // Create sidebar for schema info
+    const sidebar = document.createElement('div');
+    sidebar.style.cssText = `
+        width: 300px;
+        background: #1a1a1a;
+        border-right: 2px solid #333;
+        padding: 20px;
+        overflow-y: auto;
+        flex-shrink: 0;
+    `;
+    sidebar.innerHTML = `
+        <h3 style="color: #4a9eff; margin-top: 0;">Database Schema</h3>
+        <div id="schema-info">Loading schema...</div>
+        
+        <h3 style="color: #4a9eff; margin-top: 30px;">Quick Queries</h3>
+        <div id="quick-queries">
+            <button class="quick-query-btn" data-query="SELECT COUNT(*) as total_snapshots FROM particle_snapshots;">Total Snapshots</button>
+            <button class="quick-query-btn" data-query="SELECT COUNT(DISTINCT frame_number) as total_frames FROM particle_snapshots;">Total Frames</button>
+            <button class="quick-query-btn" data-query="SELECT MIN(frame_number) as min_frame, MAX(frame_number) as max_frame FROM particle_snapshots;">Frame Range</button>
+            <button class="quick-query-btn" data-query="SELECT frame_number, COUNT(*) as particle_count FROM particle_snapshots GROUP BY frame_number ORDER BY frame_number LIMIT 10;">Particles per Frame</button>
+            <button class="quick-query-btn" data-query="SELECT * FROM particle_snapshots ORDER BY created_at DESC LIMIT 100;">Recent Snapshots</button>
+        </div>
+    `;
+    
+    // Create main query area
+    const queryArea = document.createElement('div');
+    queryArea.style.cssText = `
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 20px;
+    `;
+    
+    // Create query input area
+    const queryInput = document.createElement('div');
+    queryInput.style.cssText = `
+        margin-bottom: 20px;
+    `;
+    queryInput.innerHTML = `
+        <h3 style="color: #4a9eff; margin-top: 0;">SQL Query</h3>
+        <textarea id="sql-query" placeholder="Enter your SELECT query here..." style="
+            width: 100%;
+            height: 120px;
+            background: #2a2a2a;
+            color: white;
+            border: 2px solid #333;
+            border-radius: 5px;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+        "></textarea>
+        <div style="margin-top: 10px;">
+            <button id="execute-query-btn" style="
+                background: #4a9eff;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-weight: bold;
+                margin-right: 10px;
+            ">Execute Query</button>
+            <button id="clear-query-btn" style="
+                background: #666;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+            ">Clear</button>
+            <span id="query-status" style="margin-left: 20px; color: #888;"></span>
+        </div>
+    `;
+    
+    // Create results area
+    const resultsArea = document.createElement('div');
+    resultsArea.style.cssText = `
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    `;
+    resultsArea.innerHTML = `
+        <h3 style="color: #4a9eff; margin-top: 0; margin-bottom: 10px;">Query Results</h3>
+        <div id="results-container" style="
+            flex: 1;
+            background: #1a1a1a;
+            border: 2px solid #333;
+            border-radius: 5px;
+            overflow: auto;
+            position: relative;
+        ">
+            <div id="results-placeholder" style="
+                padding: 40px;
+                text-align: center;
+                color: #666;
+                font-style: italic;
+            ">No query executed yet. Enter a SELECT query above and click Execute.</div>
+        </div>
+    `;
+    
+    // Assemble the interface
+    content.appendChild(sidebar);
+    content.appendChild(queryArea);
+    queryArea.appendChild(queryInput);
+    queryArea.appendChild(resultsArea);
+    
+    sqlContainer.appendChild(header);
+    sqlContainer.appendChild(content);
+    document.body.appendChild(sqlContainer);
+    
+    // Add CSS for quick query buttons
+    const style = document.createElement('style');
+    style.textContent = `
+        .quick-query-btn {
+            display: block;
+            width: 100%;
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            text-align: left;
+            transition: background 0.2s;
+        }
+        .quick-query-btn:hover {
+            background: #444;
+        }
+        
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .results-table th,
+        .results-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .results-table th {
+            background: #2a2a2a;
+            color: #4a9eff;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .results-table tr:hover {
+            background: #222;
+        }
+        .results-table td {
+            color: #ddd;
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Set up event listeners
+    setupSQLViewEventListeners();
+    
+    // Load schema information
+    loadDatabaseSchema();
+}
+
+// Set up event listeners for the SQL view
+function setupSQLViewEventListeners() {
+    // Back to menu button
+    document.getElementById('backToMenuBtn').addEventListener('click', () => {
+        document.getElementById('sql-view-container').remove();
+        showMainMenu();
+    });
+    
+    // Execute query button
+    document.getElementById('execute-query-btn').addEventListener('click', () => {
+        const query = document.getElementById('sql-query').value.trim();
+        if (query) {
+            executeQuery(query);
+        }
+    });
+    
+    // Clear query button
+    document.getElementById('clear-query-btn').addEventListener('click', () => {
+        document.getElementById('sql-query').value = '';
+        document.getElementById('query-status').textContent = '';
+    });
+    
+    // Quick query buttons
+    document.addEventListener('click', (e) => {
+        if (e.target.classList.contains('quick-query-btn')) {
+            const query = e.target.getAttribute('data-query');
+            document.getElementById('sql-query').value = query;
+            executeQuery(query);
+        }
+    });
+    
+    // Enter key in textarea
+    document.getElementById('sql-query').addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter') {
+            const query = e.target.value.trim();
+            if (query) {
+                executeQuery(query);
+            }
+        }
+    });
+}
+
+// Load database schema information
+async function loadDatabaseSchema() {
+    try {
+        const response = await fetch('http://localhost:3001/sql/schema');
+        const data = await response.json();
+        
+        if (data.success) {
+            displaySchema(data.tables);
+        } else {
+            document.getElementById('schema-info').innerHTML = `
+                <div style="color: #ff6b6b;">Error loading schema: ${data.error}</div>
+            `;
+        }
+    } catch (error) {
+        document.getElementById('schema-info').innerHTML = `
+            <div style="color: #ff6b6b;">Failed to connect to database: ${error.message}</div>
+        `;
+    }
+}
+
+// Display schema information
+function displaySchema(tables) {
+    const schemaContainer = document.getElementById('schema-info');
+    let html = '';
+    
+    for (const [tableName, tableInfo] of Object.entries(tables)) {
+        html += `
+            <div style="margin-bottom: 20px;">
+                <h4 style="color: #51cf66; margin: 0 0 8px 0;">${tableName}</h4>
+                <div style="font-size: 11px; color: #888; margin-bottom: 8px;">${tableInfo.type}</div>
+        `;
+        
+        for (const column of tableInfo.columns) {
+            const nullable = column.is_nullable === 'YES' ? '?' : '!';
+            html += `
+                <div style="margin-left: 10px; font-size: 11px; color: #ccc;">
+                    <span style="color: #ffd93d;">${column.column_name}</span>
+                    <span style="color: #74c0fc;">${column.data_type}</span>
+                    <span style="color: #888;">${nullable}</span>
+                </div>
+            `;
+        }
+        
+        html += '</div>';
+    }
+    
+    schemaContainer.innerHTML = html;
+}
+
+// Execute a SQL query
+async function executeQuery(query) {
+    const statusElement = document.getElementById('query-status');
+    const resultsContainer = document.getElementById('results-container');
+    const executeBtn = document.getElementById('execute-query-btn');
+    
+    // Update UI to show loading state
+    statusElement.textContent = 'Executing...';
+    statusElement.style.color = '#ffd93d';
+    executeBtn.disabled = true;
+    executeBtn.textContent = 'Executing...';
+    
+    try {
+        const response = await fetch('http://localhost:3001/sql/query', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            displayQueryResults(data);
+            statusElement.textContent = `✅ Query executed in ${data.executionTime}ms - ${data.rowCount} rows returned`;
+            statusElement.style.color = '#51cf66';
+        } else {
+            displayQueryError(data.error, data.hint);
+            statusElement.textContent = `❌ Query failed: ${data.error}`;
+            statusElement.style.color = '#ff6b6b';
+        }
+    } catch (error) {
+        displayQueryError(`Network error: ${error.message}`);
+        statusElement.textContent = `❌ Connection failed: ${error.message}`;
+        statusElement.style.color = '#ff6b6b';
+    } finally {
+        // Reset button state
+        executeBtn.disabled = false;
+        executeBtn.textContent = 'Execute Query';
+    }
+}
+
+// Display query results in a table
+function displayQueryResults(data) {
+    const resultsContainer = document.getElementById('results-container');
+    
+    if (data.rows.length === 0) {
+        resultsContainer.innerHTML = `
+            <div style="padding: 40px; text-align: center; color: #888;">
+                Query executed successfully but returned no results.
+            </div>
+        `;
+        return;
+    }
+    
+    // Create table
+    let html = '<table class="results-table"><thead><tr>';
+    
+    // Add headers
+    for (const field of data.fields) {
+        html += `<th>${field}</th>`;
+    }
+    html += '</tr></thead><tbody>';
+    
+    // Add rows
+    for (const row of data.rows) {
+        html += '<tr>';
+        for (const field of data.fields) {
+            let value = row[field];
+            if (value === null) {
+                value = '<span style="color: #666; font-style: italic;">NULL</span>';
+            } else if (typeof value === 'number') {
+                value = value.toLocaleString();
+            } else if (typeof value === 'string' && value.length > 50) {
+                value = value.substring(0, 47) + '...';
+            }
+            html += `<td>${value}</td>`;
+        }
+        html += '</tr>';
+    }
+    
+    html += '</tbody></table>';
+    resultsContainer.innerHTML = html;
+}
+
+// Display query error
+function displayQueryError(error, hint = null) {
+    const resultsContainer = document.getElementById('results-container');
+    
+    let html = `
+        <div style="padding: 20px;">
+            <div style="color: #ff6b6b; font-weight: bold; margin-bottom: 10px;">
+                ❌ Query Error
+            </div>
+            <div style="color: #ddd; margin-bottom: 15px; font-family: monospace; background: #2a1a1a; padding: 10px; border-radius: 3px;">
+                ${error}
+            </div>
+    `;
+    
+    if (hint) {
+        html += `
+            <div style="color: #ffd93d; font-weight: bold; margin-bottom: 5px;">
+                💡 Hint:
+            </div>
+            <div style="color: #ddd; font-family: monospace; background: #1a1a2a; padding: 10px; border-radius: 3px;">
+                ${hint}
+            </div>
+        `;
+    }
+    
+    html += '</div>';
+    resultsContainer.innerHTML = html;
+}

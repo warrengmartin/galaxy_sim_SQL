@@ -408,6 +408,110 @@ app.get('/playback/export', async (req, res) => {
   }
 });
 
+// Add SQL query endpoint for web interface
+app.post('/sql/query', async (req, res) => {
+  const { query } = req.body;
+  
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'Query is required and must be a string' });
+  }
+  
+  // Basic SQL injection protection - only allow SELECT statements
+  const trimmedQuery = query.trim().toLowerCase();
+  if (!trimmedQuery.startsWith('select')) {
+    return res.status(400).json({ 
+      error: 'Only SELECT queries are allowed for security reasons' 
+    });
+  }
+  
+  // Additional protection - block certain dangerous keywords
+  const dangerousKeywords = ['drop', 'delete', 'insert', 'update', 'alter', 'create', 'truncate'];
+  for (const keyword of dangerousKeywords) {
+    if (trimmedQuery.includes(keyword)) {
+      return res.status(400).json({ 
+        error: `Keyword '${keyword}' is not allowed for security reasons` 
+      });
+    }
+  }
+  
+  const client = await pool.connect();
+  try {
+    console.log(`🔍 Executing SQL query: ${query.substring(0, 100)}${query.length > 100 ? '...' : ''}`);
+    
+    const startTime = Date.now();
+    const result = await client.query(query);
+    const executionTime = Date.now() - startTime;
+    
+    console.log(`✅ Query executed in ${executionTime}ms, returned ${result.rows.length} rows`);
+    
+    res.json({
+      success: true,
+      rows: result.rows,
+      rowCount: result.rowCount,
+      executionTime: executionTime,
+      fields: result.fields ? result.fields.map(f => f.name) : []
+    });
+  } catch (e) {
+    console.error('❌ SQL query error:', e.message);
+    res.status(500).json({
+      success: false,
+      error: e.message,
+      hint: e.hint || null
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// Add endpoint to get database schema information
+app.get('/sql/schema', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    // Get table information
+    const tablesResult = await client.query(`
+      SELECT 
+        table_name,
+        table_type
+      FROM information_schema.tables 
+      WHERE table_schema = 'public'
+      ORDER BY table_name;
+    `);
+    
+    // Get column information for each table
+    const tables = {};
+    for (const table of tablesResult.rows) {
+      const columnsResult = await client.query(`
+        SELECT 
+          column_name,
+          data_type,
+          is_nullable,
+          column_default
+        FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = $1
+        ORDER BY ordinal_position;
+      `, [table.table_name]);
+      
+      tables[table.table_name] = {
+        type: table.table_type,
+        columns: columnsResult.rows
+      };
+    }
+    
+    res.json({
+      success: true,
+      tables: tables
+    });
+  } catch (e) {
+    console.error('❌ Schema query error:', e.message);
+    res.status(500).json({
+      success: false,
+      error: e.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
 // Server startup with health check
 const server = app.listen(3001, '0.0.0.0', () => {
   console.log('╔════════════════════════════════════════════════════╗');
