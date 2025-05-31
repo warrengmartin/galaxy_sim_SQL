@@ -329,6 +329,27 @@ app.post('/maintenance/compress', async (req, res) => {
   }
 });
 
+// Add a maintenance endpoint to clear the database (truncate tables)
+app.post('/maintenance/clear', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('TRUNCATE TABLE particles CASCADE;');
+      await client.query('TRUNCATE TABLE particle_snapshots CASCADE;');
+      await client.query('COMMIT');
+      res.json({ status: 'success', message: 'Database cleared.' });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ status: 'error', message: e.toString() });
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ status: 'connection_failed', message: e.toString() });
+  }
+});
+
 // Server startup with health check
 const server = app.listen(3001, () => {
   console.log('╔════════════════════════════════════════════════════╗');

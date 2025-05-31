@@ -41,7 +41,7 @@ let blendPass;
 
 // Controls how often to collect and send particle data to the backend database
 // Higher values = fewer snapshots = better performance, less data
-let snapshotFrameInterval = 60; // Every 60 frames (1-2 seconds at 60 FPS)
+let snapshotFrameInterval = 1; // Every frame (no skipping, full data capture)
 
 /*--------------------------INITIALISATION-----------------------------------------------*/
 const gravity = 20;
@@ -398,7 +398,7 @@ function fillTextures( texturePosition, textureVelocity ) {
  * @param texturePosition array that contain positions of particles
  * @param textureVelocity array that contain velocities of particles
  */
-function fillUniverseTextures( texturePosition, textureVelocity ) {
+async function fillUniverseTextures( texturePosition, textureVelocity ) {
 
     const posArray = texturePosition.image.data;
     const velArray = textureVelocity.image.data;
@@ -448,7 +448,7 @@ function fillUniverseTextures( texturePosition, textureVelocity ) {
         velArray[ k + 3 ] = 0;
     }
     // Send to backend after filling
-    sendParticlesToBackend(posArray, velArray);
+    await sendParticlesToBackend(posArray, velArray);
 }
 
 function fillGalaxiesCollisionTextures( texturePosition, textureVelocity ){
@@ -957,21 +957,41 @@ function render() {
 let previousVelocities = null;
 let frameNumber = 0;
 
-function sendParticleSnapshotsToBackend(snapshots) {
-    fetch('http://localhost:3001/particle_snapshots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(snapshots)
-    }).then(res => {
-        if (res.ok) {
-            console.log('Particle snapshots sent to backend.');
-        } else {
-            console.error('Failed to send particle snapshots to backend.');
+async function sendParticleSnapshotsToBackend(snapshots) {
+    const BATCH_SIZE = 5000;
+    const MAX_RETRIES = 5;
+    const BASE_DELAY = 20; // ms
+    for (let idx = 0; idx < snapshots.length; idx += BATCH_SIZE) {
+        const batch = snapshots.slice(idx, idx + BATCH_SIZE);
+        let attempt = 0;
+        while (attempt < MAX_RETRIES) {
+            try {
+                const res = await fetch('http://localhost:3001/particle_snapshots', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(batch)
+                });
+                if (res.ok) {
+                    console.log(`Particle snapshots sent to backend. Batch: ${Math.floor(idx/BATCH_SIZE)+1}`);
+                    break;
+                } else {
+                    throw new Error('Server error');
+                }
+            } catch (e) {
+                attempt++;
+                if (attempt >= MAX_RETRIES) {
+                    console.error('Failed to send particle snapshots to backend after retries.');
+                    break;
+                }
+                const delay = BASE_DELAY * Math.pow(2, attempt);
+                await new Promise(r => setTimeout(r, delay));
+            }
         }
-    }).catch(console.error);
+    }
 }
 
-function collectAndSendParticleSnapshots() {
+// 1. Make collectAndSendParticleSnapshots async and await sendParticleSnapshotsToBackend
+async function collectAndSendParticleSnapshots() {
     // Get current positions and velocities from GPU
     const posTexture = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
     const velTexture = gpuCompute.getCurrentRenderTarget(velocityVariable).texture;
@@ -1035,15 +1055,13 @@ function collectAndSendParticleSnapshots() {
             x, y, z, vx, vy, vz, speed, ax, ay, az, force
         });
     }
+    await sendParticleSnapshotsToBackend(snapshots);
     previousVelocities = velBuffer.slice();
     frameNumber++;
-    
     // Log the sampling statistics
     if (frameNumber % 10 === 0) {
-        console.log(`Sending snapshot data: ${snapshots.length} particles (sampling rate: 1:${samplingRate})`);
+        console.log(`Snapshot data processed for frame ${frameNumber}: ${snapshots.length} particles (sampling rate: 1:${samplingRate})`);
     }
-    
-    sendParticleSnapshotsToBackend(snapshots);
 }
 
 function showLoadingMessage(message) {
@@ -1100,7 +1118,10 @@ function primeSimulation() {
     }, 500); // Simulate short loading
 }
 
-function sendParticlesToBackend(posArray, velArray) {
+async function sendParticlesToBackend(posArray, velArray) {
+    const BATCH_SIZE = 10000;
+    const MAX_RETRIES = 5;
+    const BASE_DELAY = 10; // ms
     const particlesData = [];
     for (let k = 0, kl = posArray.length; k < kl; k += 4) {
         particlesData.push({
@@ -1112,17 +1133,33 @@ function sendParticlesToBackend(posArray, velArray) {
             vz: velArray[k+2]
         });
     }
-    fetch('http://localhost:3001/particles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(particlesData)
-    }).then(res => {
-        if (res.ok) {
-            console.log('Particles sent to backend.');
-        } else {
-            console.error('Failed to send particles to backend.');
+    for (let idx = 0; idx < particlesData.length; idx += BATCH_SIZE) {
+        const batch = particlesData.slice(idx, idx + BATCH_SIZE);
+        let attempt = 0;
+        while (attempt < MAX_RETRIES) {
+            try {
+                const res = await fetch('http://localhost:3001/particles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(batch)
+                });
+                if (res.ok) {
+                    console.log(`Particles sent to backend. Batch: ${Math.floor(idx/BATCH_SIZE)+1}`);
+                    break;
+                } else {
+                    throw new Error('Server error');
+                }
+            } catch (e) {
+                attempt++;
+                if (attempt >= MAX_RETRIES) {
+                    console.error('Failed to send particles to backend after retries.');
+                    break;
+                }
+                const delay = BASE_DELAY * Math.pow(2, attempt);
+                await new Promise(r => setTimeout(r, delay));
+            }
         }
-    }).catch(console.error);
+    }
 }
 
 // Add event listener for the headless button directly (now in HTML)
@@ -1165,17 +1202,33 @@ function showHeadlessPrompt() {
         <h2>Headless Simulation</h2>
         <label>Frames per second: <input id="headless-fps" type="number" min="1" max="1000" value="110" /></label>
         <label>Duration (minutes): <input id="headless-mins" type="number" min="1" max="120" value="5" /></label>
+        <label><input id="clear-db" type="checkbox" /> Overwrite database (delete all previous data)</label>
         <button type="submit" class="button">Start Headless</button>
     `;
-    form.onsubmit = function(e) {
+    form.onsubmit = async function(e) {
         e.preventDefault();
         const fps = parseInt(document.getElementById('headless-fps').value, 10) || 110;
         const mins = parseInt(document.getElementById('headless-mins').value, 10) || 5;
+        const clearDb = document.getElementById('clear-db').checked;
         overlay.remove();
-        primeHeadlessSimulation({ fps, mins });
+        if (clearDb) {
+            await clearDatabase();
+        }
+        await primeHeadlessSimulation({ fps, mins });
     };
     overlay.appendChild(form);
     document.body.appendChild(overlay);
+}
+
+// Function to clear the database by calling backend endpoint
+async function clearDatabase() {
+    showLoadingMessage('Clearing database...');
+    try {
+        await fetch('http://localhost:3001/maintenance/clear', { method: 'POST' });
+    } catch (e) {
+        alert('Failed to clear database. Please check backend.');
+    }
+    hideLoadingMessage();
 }
 
 // Headless pause/start logic and loading screen
@@ -1183,10 +1236,8 @@ let headlessPaused = true;
 let headlessShouldStop = false;
 let headlessProgressDiv = null;
 
-function primeHeadlessSimulation({ fps, mins }) {
-    // Use default universe parameters, but no rendering or GUI
+async function primeHeadlessSimulation({ fps, mins }) {
     const totalFrames = fps * mins * 60;
-    // Set up effectController for universe sim, no background
     effectController = {
         gravity: 225.0,
         interactionRate: 0.05,
@@ -1206,7 +1257,6 @@ function primeHeadlessSimulation({ fps, mins }) {
         autoRotation: false
     };
     PARTICLES = effectController.numberOfStars;
-    // Minimal Three.js setup for GPUComputationRenderer
     const canvas = document.createElement('canvas');
     renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setSize(1, 1);
@@ -1217,7 +1267,7 @@ function primeHeadlessSimulation({ fps, mins }) {
     }
     const dtPosition = gpuCompute.createTexture();
     const dtVelocity = gpuCompute.createTexture();
-    fillUniverseTextures(dtPosition, dtVelocity);
+    await fillUniverseTextures(dtPosition, dtVelocity);
     velocityVariable = gpuCompute.addVariable('textureVelocity', computeShaderVelocity, dtVelocity);
     positionVariable = gpuCompute.addVariable('texturePosition', computeShaderPosition, dtPosition);
     gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
@@ -1280,6 +1330,7 @@ function showHeadlessLoadingScreen({ fps, mins, totalFrames }) {
     document.getElementById('cancel-headless-btn').onclick = () => {
         headlessShouldStop = true;
         headlessProgressDiv.remove();
+        showMainMenu(); // Restore main menu after cancel
     };
 }
 
@@ -1291,20 +1342,20 @@ async function runHeadlessSimulationWithProgress({ fps, mins, totalFrames }) {
         while (headlessPaused) await new Promise(r => setTimeout(r, 100));
         gpuCompute.compute();
         if (i % snapshotFrameInterval === 0) {
-            collectAndSendParticleSnapshots();
+            await collectAndSendParticleSnapshots();
         }
-        previousVelocities = null;
-        frameNumber++;
         if (i % 10 === 0) {
             let elapsed = (Date.now() - startTime) / 1000;
             let percent = (i + 1) / totalFrames;
-            let estTotal = elapsed / percent;
+            let estTotal = percent > 0 ? elapsed / percent : 0;
             let estRemain = estTotal - elapsed;
             showHeadlessProgressBar(i + 1, totalFrames, estRemain, fps, mins);
             await new Promise(r => setTimeout(r, 0));
         }
     }
     if (headlessProgressDiv) headlessProgressDiv.remove();
+    // After simulation, show main menu again
+    showMainMenu();
     alert('Headless simulation complete!');
 }
 
@@ -1320,4 +1371,37 @@ function showHeadlessProgressBar(current, total, secondsLeft, fps, mins) {
     let min = Math.floor(secondsLeft / 60);
     let sec = Math.floor(secondsLeft % 60);
     text.innerHTML = `Progress: ${percent}% &mdash; ~${min}m ${sec}s remaining`;
+}
+
+// Add a function to show the main menu (simulation choice)
+function showMainMenu() {
+    // Remove any overlays
+    const overlay = document.getElementById('headless-overlay');
+    if (overlay) overlay.remove();
+    // Recreate the main menu container
+    if (!document.getElementById('main-container')) {
+        const mainContainer = document.createElement('div');
+        mainContainer.id = 'main-container';
+        mainContainer.style.position = 'fixed';
+        mainContainer.style.top = '0';
+        mainContainer.style.left = '0';
+        mainContainer.style.width = '100vw';
+        mainContainer.style.height = '100vh';
+        mainContainer.style.background = 'rgba(0,0,0,0.85)';
+        mainContainer.style.display = 'flex';
+        mainContainer.style.flexDirection = 'column';
+        mainContainer.style.justifyContent = 'center';
+        mainContainer.style.alignItems = 'center';
+        mainContainer.style.zIndex = '9999';
+        mainContainer.innerHTML = `
+            <h2 style='color:#fff'>Choose Simulation Type</h2>
+            <button id="choice1" class="button" style="margin:1em;font-size:1.2em;">Normal Mode</button>
+            <button id="choice2" class="button" style="margin:1em;font-size:1.2em;">Experimental Mode</button>
+            <button id="headlessBtn" class="button" style="margin:1em;font-size:1.2em;">Headless Mode</button>
+        `;
+        document.body.appendChild(mainContainer);
+        document.getElementById("choice1").onclick = () => selectChoice(1);
+        document.getElementById("choice2").onclick = () => selectChoice(2);
+        document.getElementById("headlessBtn").onclick = showHeadlessPrompt;
+    }
 }
