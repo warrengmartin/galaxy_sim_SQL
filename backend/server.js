@@ -304,7 +304,7 @@ app.post('/maintenance/compress', async (req, res) => {
       // Manually compress chunks
       const result = await client.query(`
         SELECT compress_chunk(chunk) 
-        FROM timescaledb_information.chunks 
+        FROM timescaledb_information.chunks l
         WHERE hypertable_name = 'particle_snapshots' 
         AND NOT compressed;
       `);
