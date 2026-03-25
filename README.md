@@ -1,5 +1,6 @@
 # Galaxy Simulation with ThreeJS and Shaders
 
+The links below are for the base version, to test the sql features you must build the appication.
 This project is a simulation of thousands of particles that reproduce gravity to simulate galaxies. It uses ThreeJS for 3D rendering and shaders to calculate the movement of particles in real-time.
 
 ![Aperçu du projet](https://i.imgur.com/4NpWBF9.jpeg)
